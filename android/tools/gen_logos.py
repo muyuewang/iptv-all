@@ -1,9 +1,23 @@
 # -*- coding: utf-8 -*-
-"""从已有源文件抽取 频道名 -> 台标URL 映射，输出 app/assets/logos.json"""
+"""从 m3u 源文件抽取「频道名 -> 台标URL」映射，输出 app/assets/logos.js
+
+用法： python gen_logos.py [源目录]
+默认源目录：../../../iptv/src2（旧工程的台标素材），也可传参覆盖。
+"""
 import re, os, glob, json
 
-SRC = r"C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\iptv\src2"
-OUT = r"C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\apk_clean\app\assets\logos.json"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ASSETS = os.path.join(_HERE, "..", "app", "assets")
+
+# 默认去旧工程找素材；找不到就提示（logos.js 已随工程提供，通常无需重跑）
+SRC = _HERE
+for _c in (os.path.join(_HERE, "..", "..", "..", "iptv", "src2"),
+           os.path.join(_HERE, "..", "..", "iptv", "src2"),
+           os.path.join(_HERE, "src2")):
+    if os.path.isdir(_c):
+        SRC = _c
+        break
+OUT = os.path.join(_ASSETS, "logos.js")
 
 def norm(n):
     n = re.sub(r'[\s　]+', '', n)

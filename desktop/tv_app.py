@@ -233,14 +233,70 @@ def find_browser():
     return None
 
 
+def _write_browser_prefs(udd):
+    """预写浏览器首选项，彻底关掉「同步浏览数据 / 自动登录」引导弹窗。
+
+    仅靠命令行开关不足以抑制 Edge 因独立 profile 触发的首次运行引导，
+    因此这里在启动前直接写入一份 Preferences。
+    """
+    try:
+        prof = os.path.join(udd, "Default")
+        os.makedirs(prof, exist_ok=True)
+        pf = os.path.join(prof, "Preferences")
+        prefs = {
+            "profile": {"default_content_setting_values": {}},
+            # 关闭账号同步 / 登录引导
+            "sync": {"requested": False, "has_setup_completed": True},
+            "signin": {"allowed": False, "allowed_on_next_startup": False},
+            "browser": {"has_seen_welcome_page": True,
+                        "check_default_browser": False,
+                        "show_app_launcher_promo": False},
+            "edge": {"first_run_completed": True,
+                     "show_first_run_experience": False},
+            # 关闭「正在同步」提示与账号栏
+            "profile_avatar_icon_index": 26,
+            "toolbar": {"show_avatar": False},
+            "credentials_enable_service": False,
+            "credentials_enable_autosignin": False,
+        }
+        # 若已存在则合并，避免覆盖用户其它设置
+        if os.path.isfile(pf):
+            try:
+                with open(pf, "r", encoding="utf-8") as f:
+                    old = json.load(f)
+                if isinstance(old, dict):
+                    for k, v in prefs.items():
+                        if isinstance(v, dict) and isinstance(old.get(k), dict):
+                            old[k].update(v)
+                        else:
+                            old[k] = v
+                    prefs = old
+            except Exception:
+                pass
+        with open(pf, "w", encoding="utf-8") as f:
+            json.dump(prefs, f)
+        return True
+    except Exception as e:
+        log("write browser prefs fail", e)
+        return False
+
+
 def open_window(url):
     """用系统浏览器以独立应用窗口打开；失败则退回默认浏览器打开标签页。"""
     br = find_browser()
     if br:
         args = [br, "--app=" + url, "--window-size=1360,880",
-                "--no-first-run", "--no-default-browser-check"]
+                "--no-first-run", "--no-default-browser-check",
+                # 关闭同步 / 登录 / 首次运行引导（配合 _write_browser_prefs）
+                "--disable-sync", "--disable-features=SigninInterception",
+                "--no-service-autorun", "--password-store=basic",
+                "--disable-breakpad", "--disable-component-update",
+                "--noerrdialogs", "--disable-infobars",
+                "--disable-session-crashed-bubble"]
         if not IS_MAC:                      # Linux 下 Chrome 需要显式指定
-            args.append("--user-data-dir=" + os.path.join(data_dir(), ".browser"))
+            udd = os.path.join(data_dir(), ".browser")
+            _write_browser_prefs(udd)
+            args.append("--user-data-dir=" + udd)
         try:
             subprocess.Popen(args, close_fds=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
