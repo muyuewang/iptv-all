@@ -1,0 +1,23 @@
+Manifest-Version: 1.0
+Automatic-Module-Name: com.google.common.util.concurrent.internal
+Bnd-LastModified: 1697548556686
+Build-Jdk-Spec: 11
+Bundle-Description: Contains    com.google.common.util.concurrent.inte
+ rnal.InternalFutureFailureAccess and    InternalFutures. Most users w
+ ill never need to use this artifact. Its    classes are conceptually 
+ a part of Guava, but they're in this separate    artifact so that And
+ roid libraries can use them without pulling in all of    Guava (just 
+ as they can use ListenableFuture by depending on the    listenablefut
+ ure artifact).
+Bundle-DocURL: https://github.com/google/guava/
+Bundle-License: http://www.apache.org/licenses/LICENSE-2.0.txt
+Bundle-ManifestVersion: 2
+Bundle-Name: Guava InternalFutureFailureAccess and InternalFutures
+Bundle-SymbolicName: com.google.guava.failureaccess
+Bundle-Version: 1.0.2
+Created-By: Apache Maven Bundle Plugin 5.1.8
+Export-Package: com.google.common.util.concurrent.internal;version="1.
+ 0.2"
+Require-Capability: osgi.ee;filter:="(&(osgi.ee=JavaSE)(version=1.7))"
+Tool: Bnd-6.3.1.202206071316
+

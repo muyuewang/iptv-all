@@ -65,19 +65,60 @@ def banner(path):
     im.save(path)
 
 def icon(path):
+    """App 图标：电视/显示器造型 + 品牌红橙渐变（与桌面端 app.ico 统一）"""
     S = 192
-    # 圆角渐变底
-    base = _grad(S, S, ACCENT, (255, 107, 53)).convert("RGBA")
-    mask = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, S, S], radius=44, fill=255)
-    im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    im.paste(base, (0, 0), mask)
+    SS = S * 4  # 超采样
+    im = Image.new("RGBA", (SS, SS), (0, 0, 0, 0))
+    g = _grad(SS, SS, ACCENT, (255, 107, 53)).convert("RGBA")
+
+    # 机身（屏幕外框）
+    body_x = SS * 0.075
+    body_y = SS * 0.115
+    body_w = SS - body_x * 2
+    body_h = body_w * 0.72
+    body_r = body_w * 0.11
+    mask = Image.new("L", (SS, SS), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [body_x, body_y, body_x + body_w, body_y + body_h], radius=body_r, fill=255)
+    im.paste(g, (0, 0), mask)
+
+    # 底座（与机身相连）
+    stand_w = body_w * 0.36
+    stand_h = SS * 0.062
+    stand_x = (SS - stand_w) / 2
+    stand_y = body_y + body_h - SS * 0.02
+    neck_w = body_w * 0.16
+    neck_x = (SS - neck_w) / 2
+    gm = Image.new("L", (SS, SS), 0)
+    dm = ImageDraw.Draw(gm)
+    dm.rounded_rectangle([neck_x, body_y + body_h - SS * 0.045, neck_x + neck_w, stand_y + stand_h * 0.5],
+                         radius=neck_w * 0.3, fill=255)
+    dm.rounded_rectangle([stand_x, stand_y, stand_x + stand_w, stand_y + stand_h],
+                         radius=stand_h * 0.45, fill=255)
+    im.paste(g, (0, 0), gm)
+
+    # 屏幕暗底
+    sc_pad = body_w * 0.075
+    sc_x, sc_y = body_x + sc_pad, body_y + sc_pad
+    sc_w, sc_h = body_w - sc_pad * 2, body_h - sc_pad * 2
+    sc_r = body_r * 0.62
+    sm = Image.new("L", (SS, SS), 0)
+    ImageDraw.Draw(sm).rounded_rectangle([sc_x, sc_y, sc_x + sc_w, sc_y + sc_h], radius=sc_r, fill=255)
+    im.paste(Image.new("RGB", (SS, SS), (16, 16, 22)).convert("RGBA"), (0, 0), sm)
+
+    # 屏幕内白色播放三角
     d = ImageDraw.Draw(im)
-    # 白色播放三角
-    cx, cy, s = 100, 96, 34
-    d.polygon([(cx - s // 2, cy - s), (cx - s // 2, cy + s), (cx + s, cy)], fill=(255, 255, 255))
+    cx, cy = sc_x + sc_w * 0.54, sc_y + sc_h * 0.5
+    tw, th = sc_w * 0.62, sc_h * 0.70
+    d.polygon([(cx - tw / 2, cy - th / 2), (cx - tw / 2, cy + th / 2), (cx + tw / 2, cy)],
+              fill=(255, 255, 255, 255))
+    # 机身高光内描边
+    d.rounded_rectangle([body_x + 1, body_y + 1, body_x + body_w - 1, body_y + body_h - 1],
+                        radius=body_r, outline=(255, 255, 255, 55), width=max(2, SS // 110))
+
+    out = im.resize((S, S), Image.LANCZOS)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    im.save(path)
+    out.save(path)
 
 banner(os.path.join(ROOT, "res", "drawable-xhdpi", "tv_banner.png"))
 icon(os.path.join(ROOT, "res", "mipmap-xxhdpi", "ic_launcher.png"))

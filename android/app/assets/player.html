@@ -101,12 +101,26 @@
   /* ---------------- 播放层 ---------------- */
   #player{position:fixed;inset:0;background:#000;z-index:50;display:none;flex-direction:column;}
   #player.show{display:flex;}
-  #vwrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;flex:0 0 auto;overflow:hidden;}
+  #vwrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;flex:0 0 auto;overflow:hidden;
+    transition:aspect-ratio .18s var(--ease);}
   #vwrap::after{content:"";position:absolute;inset:0;pointer-events:none;
     box-shadow:inset 0 0 60px rgba(0,0,0,.6);}
-  video{width:100%;height:100%;background:#000;display:block;}
+  video{width:100%;height:100%;background:#000;display:block;object-fit:contain;}
   #status{margin:auto;color:#e6e9f0;font-size:14px;font-weight:500;text-align:center;padding:0 30px;
     position:absolute;left:0;right:0;top:42%;text-shadow:0 2px 12px rgba(0,0,0,.8);}
+
+  /* ================= 手机全屏模式（点「全屏」后） =================
+     视频铺满 100% 屏高，控制条浮在底部（半透明、可自动隐藏），
+     竖屏转横屏后不再有「上面一条小视频 + 下面一条控制栏」的割裂感。 */
+  #player.fs #vwrap{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;flex:none;}
+  #player.fs #ctrl{position:absolute;left:0;right:0;bottom:0;z-index:2;border-top:none;
+    background:linear-gradient(transparent,rgba(8,9,13,.72) 34%,rgba(8,9,13,.95));
+    padding-top:52px;}
+  #player.fs #ctrl.hide{opacity:0;pointer-events:none;}
+  #player.fs #epg{max-height:44vh;}
+  /* 全屏时把「退出全屏」按钮做成唯一显眼主按钮 */
+  #player.fs #btnFs{background:var(--brand-grad);border-color:transparent;color:#fff;
+    font-weight:600;box-shadow:0 3px 14px -4px rgba(255,45,85,.65);}
   #ctrl{display:flex;flex-direction:column;
     background:rgba(12,13,18,.86);-webkit-backdrop-filter:blur(20px) saturate(160%);
     backdrop-filter:blur(20px) saturate(160%);border-top:1px solid var(--line);
@@ -198,7 +212,7 @@
 </div>
 
 <div id="player">
-  <div id="vwrap"><video id="v" controls playsinline webkit-playsinline tabindex="0"></video></div>
+  <div id="vwrap"><video id="v" controls playsinline webkit-playsinline preload="auto" x5-video-player-type="h5-page" tabindex="0"></video></div>
   <div id="status">正在解析线路…</div>
   <div id="ctrl">
     <div id="pbar">
@@ -261,14 +275,108 @@ function openChannel(tid, id, name){
   $("btnEpg").className="btn"; $("epg").classList.remove("show");
   $("ctrl").classList.remove("hide"); resetCtrlTimer();
   $("player").classList.add("show");
+  /* ★ 手机端：进入播放自动转横屏全屏，避免竖屏下视频只占上面一小条。
+     竖屏手机屏宽有限，横屏才能让 16:9 视频真正铺满可视面积。
+     TV（IS_TV）本身就横屏，不需要切。 */
+  if(!IS_TV && window.NativeTV && NativeTV.setLandscape) setFsMode(true);
   $("status").style.display="block"; $("status").textContent="正在解析线路…";
   $("lines").innerHTML="";
   C.fetchPlay(tid, id).then(function(res){
     cur.epg = res.epg || [];
     if(!res.urls.length){ $("status").textContent="线路解析失败，请返回重进刷新令牌"; return; }
-    cur.urls=res.urls; renderLines(); playIdx(0);
+    cur.urls=res.urls; renderLines();
     if(IS_TV){ var f=document.querySelector("#lines .ln"); if(f) f.focus(); }
+    /* ★ 智能选路：并发探测「延迟 + 码率」，低端机优先选低码率线路 */
+    $("status").textContent="正在测速选路…";
+    pickBestLine(cur.urls).then(function(best){
+      playIdx(best);
+    }).catch(function(){ playIdx(0); });
   }).catch(function(e){ $("status").textContent="网络错误："+e; });
+}
+
+/* ---------- 线路智能测速选优 ----------
+   探测每条线路的「首字节延迟」与「视频分辨率/码率」。
+   低端设备解不动 1080p@2.4Mbps —— 优先选码率低的线路，避免解码跟不上导致卡顿。
+   评分 = 延迟权重 + 码率惩罚（低端机惩罚系数更大）。                        */
+function probeLine(url, timeoutMs){
+  return new Promise(function(resolve){
+    var t0=Date.now(), done=false, xhr=new XMLHttpRequest();
+    var finish=function(rtt, br){
+      if(done) return; done=true;
+      try{xhr.abort();}catch(e){}
+      resolve({rtt: rtt, br: br});   /* rtt=首字节ms, br=估算kbps(0=未知) */
+    };
+    var to=setTimeout(function(){ finish(1e9, 0); }, timeoutMs);
+    try{
+      xhr.open("GET", url, true);
+      xhr.responseType="arraybuffer";
+      xhr.onprogress=function(ev){
+        /* 拿到首批数据 → 既算延迟也算瞬时速率 */
+        if(!done && ev.loaded >= 2048){
+          clearTimeout(to);
+          var dt=(Date.now()-t0)/1000;
+          var kbps = dt>0 ? Math.round(ev.loaded*8/1000/dt) : 0;
+          finish(Date.now()-t0, kbps);
+        }
+      };
+      xhr.onreadystatechange=function(){
+        if(xhr.readyState===2){ /* 已收到响应头，记录首字节时间（下限） */
+          if(!done){ /* 先记为候选，等 onprogress 拿更准的码率 */ }
+        }
+      };
+      xhr.onerror=function(){ clearTimeout(to); finish(1e9, 0); };
+      /* 取 64KB 头：足够覆盖 FLV metadata，能读到 width/height/videodatarate */
+      try{ xhr.setRequestHeader("Range","bytes=0-65535"); }catch(e){}
+      xhr.send();
+    }catch(e){ clearTimeout(to); finish(1e9, 0); }
+  });
+}
+function pickBestLine(urls){
+  var n=Math.min(urls.length, 8), tasks=[];
+  for(var i=0;i<n;i++) tasks.push(probeLine(urls[i], 2500));
+  return Promise.all(tasks).then(function(rs){
+    /* 低端机：码率惩罚 3 倍（宁可选低清也别卡）；中高端：只轻微考虑码率 */
+    var wBr = (TIER === "low") ? 3.0 : 0.6;
+    var best=0, bestScore=Infinity;
+    for(var i=0;i<n;i++){
+      var r=rs[i];
+      var score;
+      if(r.rtt>=1e9){ score = 1e7 + i; }              /* 失败线路垫底 */
+      else {
+        /* 归一化：延迟(s) + 码率(Mbps)*权重；低码率得分更低 → 更容易被选中 */
+        var latS = r.rtt/1000;
+        var mbps = r.br/1000;
+        score = latS + mbps*wBr;
+      }
+      if(score<bestScore){ bestScore=score; best=i; }
+    }
+    return best;
+  });
+}
+
+/* 兼容旧名 */
+function pickFastest(urls){ return pickBestLine(urls); }
+
+/* 对每条线路发一次轻量探测，测「首字节延迟」；返回最快线路的索引。
+   超时/失败的线路排到最后，避免默认走慢线路造成起播卡顿。 */
+function probeOnce(url, timeoutMs){
+  return new Promise(function(resolve){
+    var t0=Date.now(), done=false, xhr=new XMLHttpRequest();
+    var finish=function(ok){ if(done) return; done=true; try{xhr.abort();}catch(e){} resolve(ok?Date.now()-t0:1e9); };
+    var to=setTimeout(function(){ finish(false); }, timeoutMs);
+    try{
+      xhr.open("GET", url, true);
+      xhr.responseType="arraybuffer";
+      xhr.onreadystatechange=function(){
+        /* 2 = HEADERS_RECEIVED：首字节到手，足够判断延迟 */
+        if(xhr.readyState===2){ clearTimeout(to); finish(true); }
+      };
+      xhr.onerror=function(){ clearTimeout(to); finish(false); };
+      /* Range 只取头部，减少流量 */
+      try{ xhr.setRequestHeader("Range","bytes=0-1023"); }catch(e){}
+      xhr.send();
+    }catch(e){ clearTimeout(to); finish(false); }
+  });
 }
 function renderLines(){
   var w=$("lines"); w.innerHTML="";
@@ -279,21 +387,211 @@ function renderLines(){
   });
 }
 function setLineUI(){ var ls=$("lines").children; for(var i=0;i<ls.length;i++) ls[i].className="ln"+(i===cur.idx?" on":""); }
+/* ==================== 原生硬解通道（v1.4 新增） ====================
+   为什么加：mpegts.js 是 JS 软解，1080p@2.4Mbps 在 4 核低端机上解不过来（实测 20 秒只推进 4.6 秒）。
+   v1.2 靠调参把指标压到 106%，但那是软解天花板，源一重还是卡。
+
+   现在的策略：优先走原生 ExoPlayer（MediaCodec 硬解，H.264/H.265 交给 DSP，CPU 几乎不参与）。
+   画面由原生 SurfaceView 输出（铺在 WebView 之下），网页只负责画控制条浮层 + 发指令。
+   mpegts.js 保留为兜底：老设备无原生桥、或原生播放直接报错时，自动回落到软解。
+
+   判定顺序：hasNativePlay() → nativePlay(url)；任何一步抛错或返回 false → 走 mpegts 软解。 */
+var NATIVE = {
+  ok: false,        /* 原生桥是否可用（开机探测一次） */
+  active: false,    /* 当前是否正在走原生播放 */
+  probing: false,
+  lastUrl: ""
+};
+
+function hasNative(){
+  try{
+    return !!(window.NativeTV && NativeTV.hasNativePlay && NativeTV.hasNativePlay());
+  }catch(e){ return false; }
+}
+NATIVE.ok = hasNative();
+
+/* 原生播放状态回调（由 MainActivity 注入：window.__onNativeState(state, detail)） */
+window.__onNativeState = function(state, detail){
+  try{
+    if(!NATIVE.active) return;
+    if(state === "buffering"){
+      $("status").style.display="block"; $("status").textContent="连接线路"+(cur.idx+1)+"…";
+    } else if(state === "ready" || state === "size"){
+      $("status").style.display="none";
+      stallN = 0; stallT = Date.now();
+    } else if(state === "decoder"){
+      /* 原生回传命中的解码器名（hw:xxx / sw-only），仅日志用途 */
+      try{ console.log("[native decoder]", detail); }catch(e){}
+    } else if(state === "ended"){
+      nextLine();
+    } else if(state === "error"){
+      /* 原生播放报错 → 本次回落到软解重试一次，避免直接黑屏 */
+      if(NATIVE.active && !NATIVE.probing){
+        toast("硬解失败，切换软解");
+        NATIVE.active = false;
+        setTimeout(function(){ playSoft(cur.idx); }, 200);
+      }
+    }
+  }catch(e){}
+};
+
+/* 原生看护：定期读播放器统计，长时间零推进判定为卡死 → 切下一条线路 */
+function bindNativeWatch(){
+  clearInterval(NATIVE.timer);
+  NATIVE.timer = setInterval(function(){
+    if(!NATIVE.active) return;
+    try{
+      var raw = NativeTV.nativeStats ? NativeTV.nativeStats() : "{}";
+      var s = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      /* bufferedMs 持续很小且位置不前进 → 卡死 */
+      if(typeof s.pos === "number"){
+        if(s.pos > NATIVE.lastPos + 200){
+          NATIVE.lastPos = s.pos; NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+        } else if(Date.now() - NATIVE.stallT > 8000){
+          toast("线路"+(cur.idx+1)+"卡顿，切换下一条");
+          NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+          nextLine();
+        }
+      }
+    }catch(e){}
+  }, 2500);
+}
+var stallN = 0, stallT = 0;
+
+/* 开始原生播放；返回 false 表示原生通道不可用（调用方回落软解） */
+function playNative(url){
+  if(!NATIVE.ok || !window.NativeTV || !NativeTV.nativePlay) return false;
+  try{
+    NATIVE.active = true; NATIVE.probing = true; NATIVE.lastUrl = url;
+    NATIVE.lastPos = 0; NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+    var r = NativeTV.nativePlay(url);
+    /* 切线路时用 nativeSwitch（保播放器实例，避免黑屏）；首次播放用 nativePlay */
+    $("status").style.display = "block"; $("status").textContent = "连接线路"+(cur.idx+1)+"…";
+    bindNativeWatch();
+    NATIVE.probing = false;
+    return (r === undefined) ? true : !!r;
+  }catch(e){
+    NATIVE.active = false; return false;
+  }
+}
+function nativeSwitch(url){
+  if(!NATIVE.active || !window.NativeTV || !NativeTV.nativeSwitch) return false;
+  try{
+    NATIVE.lastUrl = url; NATIVE.lastPos = 0; NATIVE.stallT = Date.now();
+    NativeTV.nativeSwitch(url);
+    $("status").style.display = "block"; $("status").textContent = "连接线路"+(cur.idx+1)+"…";
+    return true;
+  }catch(e){ return false; }
+}
+function nativeStop(){
+  NATIVE.active = false;
+  clearInterval(NATIVE.timer);
+  try{ if(window.NativeTV && NativeTV.nativeStop) NativeTV.nativeStop(); }catch(e){}
+}
+
+/* ---------- 设备分级：决定软解缓冲策略 ---------- */
+/* 1080p@2.4Mbps FLV 软解对低端机压力大，按设备能力给不同参数 */
+var TIER = (function(){
+  try{
+    var mem = navigator.deviceMemory || 4;           /* GB，Chrome/WebView 支持 */
+    var hc  = navigator.hardwareConcurrency || 4;    /* 逻辑核数 */
+    var px  = Math.max(screen.width, screen.height);
+    /* 低端：小内存 或 少核 或 低分辨率屏 */
+    if(mem <= 2 || hc <= 4 || px <= 1280) return "low";
+    if(mem >= 6 && hc >= 8) return "high";
+    return "mid";
+  }catch(e){ return "mid"; }
+})();
+
+/* 按档位生成 mpegts 配置 —— 核心是别让缓冲区无限堆积、别用 Worker 反拖主线程 */
+function mpegtsCfg(){
+  if(TIER === "low"){
+    /* 低端：关 Worker（避免线程切换开销与内存翻倍），延迟加载，浅缓冲，激进追帧 */
+    return {enableWorker:false,
+            lazyLoad:true, stashInitialSize:256,
+            liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:1.2,
+            liveBufferLatencyMinRemain:0.4,
+            autoCleanupSourceBuffer:true, autoCleanupMaxBackwardDuration:14,
+            autoCleanupMinBackwardDuration:8};
+  }
+  if(TIER === "high"){
+    /* 高端：Worker 解封装不卡 UI，中等缓冲换取顺滑 */
+    return {enableWorker:true,
+            lazyLoad:true, stashInitialSize:512,
+            liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:2.5,
+            liveBufferLatencyMinRemain:0.8,
+            autoCleanupSourceBuffer:true, autoCleanupMaxBackwardDuration:24,
+            autoCleanupMinBackwardDuration:12};
+  }
+  /* 中端：Worker + 适中缓冲 */
+  return {enableWorker:true,
+          lazyLoad:true, stashInitialSize:384,
+          liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:1.8,
+          liveBufferLatencyMinRemain:0.6,
+          autoCleanupSourceBuffer:true, autoCleanupMaxBackwardDuration:18,
+          autoCleanupMinBackwardDuration:10};
+}
+
 function playIdx(i){
   cur.idx=i; setLineUI();
   var url=cur.urls[i]; if(!url) return;
+  /* ★ v1.4：优先原生硬解。原生已在播 → 只换源（nativeSwitch）；否则尝试起播。
+     两条路都失败才回落 mpegts 软解。 */
+  if(NATIVE.ok){
+    var ok = NATIVE.active ? nativeSwitch(url) : playNative(url);
+    if(ok){
+      /* 原生通道接管：把网页 <video> 彻底停掉，避免两路同时解码抢资源 */
+      try{ if(player){ player.destroy(); player=null; } }catch(e){}
+      var v0=$("v"); try{ v0.pause(); v0.removeAttribute("src"); v0.load(); }catch(e){}
+      return;
+    }
+  }
+  playSoft(i);
+}
+
+/* 软解兜底：mpegts.js（原 playIdx 的逻辑） */
+function playSoft(i){
+  cur.idx=i; setLineUI();
+  var url=cur.urls[i]; if(!url) return;
+  nativeStop();
   if(player){ try{player.destroy();}catch(e){} player=null; }
   var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  /* ★ 低端机限制解码输出尺寸：1080p 源缩到屏幕尺寸渲染，显著降低 GPU/合成压力 */
+  try{
+    var PX = Math.max(screen.width, screen.height);
+    if(TIER === "low" && PX <= 1280){
+      v.setAttribute("width", Math.round(PX));
+      v.style.maxWidth = PX + "px";
+    } else {
+      v.removeAttribute("width"); v.style.maxWidth = "";
+    }
+  }catch(e){}
   $("status").style.display="block"; $("status").textContent="连接线路"+(i+1)+"…";
   if(!window.mpegts || !mpegts.getFeatureList().mseLivePlayback){ $("status").textContent="当前设备不支持 FLV 直播播放"; return; }
-  player=mpegts.createPlayer({type:"flv", isLive:true, url:url},
-      {enableWorker:true, liveBufferLatencyChasing:true, lazyLoad:false, stashInitialSize:128, autoCleanupSourceBuffer:true});
-  player.on(mpegts.Events.ERROR, function(){ nextLine(); });
-  v.onplaying=function(){ $("status").style.display="none"; };
+  try{
+    player=mpegts.createPlayer({type:"flv", isLive:true, url:url, cors:true}, mpegtsCfg());
+  }catch(e){ nextLine(); return; }
+  v.onplaying=function(){ stall.n=0; stall.t=Date.now(); $("status").style.display="none"; };
   v.onended=function(){ nextLine(); };
   v.onerror=function(){ nextLine(); };
+  bindStallWatch(v);
+  player.on(mpegts.Events.ERROR, function(){ nextLine(); });
   player.attachMediaElement(v);
   try{ player.load(); v.play(); }catch(e){ nextLine(); }
+}
+
+/* 播放中卡顿看护：统计 waiting 次数，短时间密集卡顿 → 判定线路不稳，自动切下一条 */
+var stall = {n:0, t:0, timer:null};
+function bindStallWatch(v){
+  stall.n=0; stall.t=Date.now();
+  v.onwaiting = function(){
+    stall.n++;
+    if(stall.n>=4 && Date.now()-stall.t < 5000){
+      toast("线路"+(cur.idx+1)+"卡顿，切换下一条");
+      clearTimeout(stall.timer);
+      stall.timer=setTimeout(function(){ nextLine(); }, 300);
+    }
+  };
 }
 function nextLine(){
   if(cur.idx+1 < cur.urls.length){ toast("线路"+(cur.idx+1)+"失败，切换下一条"); playIdx(cur.idx+1); }
@@ -301,14 +599,49 @@ function nextLine(){
 }
 function closePlayer(){
   if(player){ try{player.destroy();}catch(e){} player=null; }
+  nativeStop();
   var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
   $("player").classList.remove("show");
+  $("player").classList.remove("fs");
+  /* ★ 退出播放：转回竖屏，恢复频道列表的竖屏布局 */
+  try{ if(window.NativeTV && NativeTV.setLandscape) NativeTV.setLandscape(false); }catch(e){}
   if(IS_TV){ var f=document.querySelector(".ch"); if(f) f.focus(); }
 }
 function toggleFs(){
   var v=$("v");
+  /* 优先走原生横屏（安卓手机竖屏时 WebView 全屏 API 不会旋转屏幕，视频仍很小）。
+     原生桥由 MainActivity 注入，window.NativeTV.setLandscape(true) 会
+     真正 setRequestedOrientation(SENSOR_LANDSCAPE) 并隐藏系统栏。 */
+  if(window.NativeTV && NativeTV.setLandscape){
+    var toFs = !isFsMode();
+    setFsMode(toFs);
+    return;
+  }
+  /* 桌面 / 其它环境：走标准全屏 API */
   if(document.fullscreenElement||document.webkitFullscreenElement){ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }
   else { (v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen).call(v); }
+}
+
+/* ---------- 全屏状态管理（原生 + 网页双通道） ----------
+   竖屏手机点全屏 → 原生旋转成横屏 + 视频铺满整屏；
+   再点一次 → 转回竖屏 + 恢复「上视频下控制条」布局。 */
+function isFsMode(){ return $("player").classList.contains("fs"); }
+
+function setFsMode(on){
+  var p=$("player"), btn=$("btnFs");
+  if(on){
+    p.classList.add("fs");
+    if(btn) btn.textContent="退出全屏";
+    try{ if(window.NativeTV && NativeTV.setLandscape) NativeTV.setLandscape(true); }catch(e){}
+    /* 部分设备原生旋转有延迟，兜底再触发一次 resize 让视频重排 */
+    setTimeout(function(){ try{ window.dispatchEvent(new Event("resize")); }catch(e){} }, 260);
+  }else{
+    p.classList.remove("fs");
+    if(btn) btn.textContent="全屏";
+    try{ if(window.NativeTV && NativeTV.setLandscape) NativeTV.setLandscape(false); }catch(e){}
+    setTimeout(function(){ try{ window.dispatchEvent(new Event("resize")); }catch(e){} }, 260);
+  }
+  hideCtrlLater();
 }
 function resetCtrlTimer(){
   clearTimeout(ctrlTimer);
@@ -320,6 +653,46 @@ function resetCtrlTimer(){
     }
   }, 6000);
 }
+/* 手机端：点一下屏幕唤出控制条，6 秒无操作自动隐藏 */
+function hideCtrlLater(){
+  $("ctrl").classList.remove("hide");
+  resetCtrlTimer();
+}
+
+/* ---------- 触屏手势（手机）----------
+   · 单击屏幕：唤出/收起控制条
+   · 双击屏幕：进/出全屏（等同点「全屏」按钮）
+   判定依据用 click（含 pointer 兜底）：
+   实测 Android WebView 的 touch 事件在 <video> 上层 clientX 常为 NaN、
+   target 还会串到控制条，直接用 touch 会误判；click 的坐标与 target 都可靠。
+   某些 ROM 只在 pointerup 派发，故同时监听 pointerup 并以短窗口去重。 */
+function bindTouchGestures(){
+  var wrap=$("vwrap"), lastTap=0, tapTimer=null, lastPointer=0;
+  function inCtrl(t){ return t && t.closest && (t.closest("#ctrl")||t.closest(".btn")||t.closest(".ln")); }
+  function onTap(e){
+    if(inCtrl(e.target)) return;
+    var now=Date.now();
+    if(now-lastTap < 320){          /* 双击 → 全屏 */
+      clearTimeout(tapTimer); lastTap=0;
+      toggleFs();
+    }else{
+      lastTap=now;
+      clearTimeout(tapTimer);
+      tapTimer=setTimeout(function(){    /* 单击 → 切换控制条 */
+        var c=$("ctrl");
+        if(c.classList.contains("hide")) hideCtrlLater(); else c.classList.add("hide");
+      }, 320);
+    }
+  }
+  wrap.addEventListener("pointerup", function(e){
+    lastPointer = Date.now();
+    onTap(e);
+  });
+  wrap.addEventListener("click", function(e){
+    if(Date.now() - lastPointer < 350) return;   /* pointerup 已处理，跳过同一次点击 */
+    onTap(e);
+  });
+}
 
 /* ---------- 列表渲染 ---------- */
 function renderChannels(){
@@ -330,6 +703,7 @@ function renderChannels(){
   if(!arr.length){ list.innerHTML='<div id="hint">'+(curCat==="fav"?"还没有收藏，按★键收藏频道":"无匹配频道")+'</div>'; return; }
   arr.forEach(function(c){
     var d=document.createElement("div"); d.className="ch"; d.tabIndex=0;
+    d.dataset.cid=c.id; d.dataset.tid=curCat;      /* 供遥控器数字键/切台定位 */
     var lg=logoSrc(c.name);
     d.innerHTML=(lg?'<img class="lg" src="'+lg+'" onerror="this.style.display=\'none\'">':'<div class="bd">'+c.name.slice(0,2)+'</div>')
               + '<div class="nm">'+c.name+'</div>'
@@ -369,6 +743,9 @@ function init(){
   $("btnEpg").onclick=function(){ var b=$("epg"); b.classList.toggle("show"); if(b.classList.contains("show")) renderEpg(); $("btnEpg").className="btn"+(b.classList.contains("show")?" act":""); resetCtrlTimer(); };
   $("btnFav").onclick=function(){ toggleFav(cur.tid,cur.id,cur.name); $("btnFav").className="btn"+(isFav(cur.tid,cur.id)?" act":""); $("btnFav").textContent=isFav(cur.tid,cur.id)?"★ 已收藏":"☆ 收藏"; };
 
+  /* 触屏手势：双击全屏 / 单击唤出控制条（手机端） */
+  bindTouchGestures();
+
   /* ===== 遥控器 / 键盘方向键导航（TV 版核心） ===== */
   function listOf(sel){ return [].slice.call(document.querySelectorAll(sel)); }
   function colsCount(){
@@ -378,9 +755,57 @@ function init(){
     return c||1;
   }
   var OK=[23,13,66,160];
+  var CHUP=[33,166], CHDN=[34,167];      /* 遥控器 频道+ / 频道- */
   document.addEventListener("keydown", function(e){
     var k=e.keyCode, ae=document.activeElement, inPlayer=$("player").classList.contains("show");
+
+    /* ---- 遥控器数字键直选频道（0-9，TV 版）----
+       输入数字后 1.2 秒内无后续数字 → 跳到该序号频道。
+       与「方向键导航 + OK」并存，互不干扰。 */
+    if(!inPlayer && !(ae && ae.tagName==="INPUT")){
+      if(k>=7 && k<=16){                      /* KEYCODE_0..9 */
+        e.preventDefault();
+        var digit=k-7;
+        numBuf = (numBuf + digit).slice(-3);
+        clearTimeout(numTimer);
+        var idx = parseInt(numBuf,10) - 1;
+        var chs0 = listOf("#list .ch");
+        if(idx>=0 && idx<chs0.length){
+          toast("跳转第 "+(idx+1)+" 个频道");
+          if(chs0[idx]) chs0[idx].focus();
+        } else { toast("无第 "+(idx+1)+" 个频道"); }
+        numTimer=setTimeout(function(){
+          var c=listOf("#list .ch")[parseInt(numBuf,10)-1];
+          if(c && typeof c.click==="function") c.click();
+          numBuf="";
+        }, 1200);
+        return;
+      }
+      /* ---- 遥控器 频道+/- 切台 ---- */
+      if(CHUP.indexOf(k)>=0 || CHDN.indexOf(k)>=0){
+        e.preventDefault();
+        var dir = CHUP.indexOf(k)>=0 ? 1 : -1;
+        var cl=listOf("#list .ch"), cur0=cl.indexOf(ae);
+        var target = cur0<0 ? 0 : Math.min(cl.length-1, Math.max(0, cur0+dir));
+        if(cl[target]){ cl[target].focus(); cl[target].click(); }
+        return;
+      }
+    }
+    /* ---- 播放中：频道+/- 切台 ---- */
+    if(inPlayer && (CHUP.indexOf(k)>=0 || CHDN.indexOf(k)>=0)){
+      e.preventDefault();
+      var dir2 = CHUP.indexOf(k)>=0 ? 1 : -1;
+      var all=listOf("#list .ch"), pos=-1;
+      for(var z=0;z<all.length;z++){ if(all[z].dataset && all[z].dataset.cid===String(cur.id)){ pos=z; break; } }
+      if(pos<0) pos = (curCat==="fav") ? -1 : 0;
+      var np2 = Math.min(all.length-1, Math.max(0, pos+dir2));
+      var nc2 = all[np2];
+      if(nc2 && nc2.dataset){ openChannel(nc2.dataset.tid||cur.tid, nc2.dataset.cid, nc2.querySelector(".nm")?nc2.querySelector(".nm").textContent:nc2.textContent); }
+      return;
+    }
+
     if(inPlayer){ $("ctrl").classList.remove("hide"); resetCtrlTimer();
+      /* 全屏时按「返回」先退全屏；这里用 KEYCODE_BACK 由原生接管，不重复处理 */
       var plist=listOf("#pbar .btn").concat(listOf("#lines .ln"));
       if(plist.indexOf(ae)<0){
         var fl=listOf("#lines .ln")[cur.idx]||listOf("#lines .ln")[0]; if(fl){ fl.focus(); return; }
@@ -411,6 +836,16 @@ function init(){
   });
   loadCat("tv");
 }
+
+/* 数字键缓冲（遥控器直选频道用） */
+var numBuf="", numTimer=null;
+
+/* 原生旋转完成后回调：横屏时确保视频铺满，竖屏时恢复默认布局 */
+window.onOrientationChanged = function(isLandscape){
+  try{
+    if(isLandscape && $("player").classList.contains("show") && !IS_TV) setFsMode(true);
+  }catch(e){}
+};
 window.addEventListener("load", init);
 </script>
 </body>

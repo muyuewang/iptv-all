@@ -257,7 +257,11 @@ function openChannel(tid,id,name){
     .then(function(r){return r.json();}).then(function(j){
       cur.epg=j.epg||[];
       if(!j.ok || !j.urls.length){ $("status").textContent="线路解析失败（"+ (j.msg||"") +"），请返回重进"; return; }
-      cur.urls=j.urls; renderLines(); playIdx(0);
+      cur.urls=j.urls; renderLines();
+      /* ★ 自动选线路：并发测速选最快的一条，避免默认走慢线路 */
+      $("status").textContent="正在测速选路…";
+      pickFastest(cur.urls).then(function(best){ playIdx(best); })
+                          .catch(function(){ playIdx(0); });
     }).catch(function(e){ $("status").textContent="网络错误，请重试"; });
 }
 function renderLines(){
@@ -269,6 +273,83 @@ function renderLines(){
   });
 }
 function setLineUI(){ var ls=$("lines").children; for(var i=0;i<ls.length;i++) ls[i].className="ln"+(i===cur.idx?" on":""); }
+/* ---------- 设备分级：决定软解缓冲策略 ---------- */
+var TIER = (function(){
+  try{
+    var mem = navigator.deviceMemory || 8;
+    var hc  = navigator.hardwareConcurrency || 8;
+    if(mem <= 2 || hc <= 4) return "low";
+    if(mem >= 8 && hc >= 8) return "high";
+    return "mid";
+  }catch(e){ return "mid"; }
+})();
+/* 桌面端 CPU 通常充裕，但仍要避免缓冲无限堆积导致的延迟累积 */
+function mpegtsCfg(){
+  if(TIER === "low"){
+    return {enableWorker:false, lazyLoad:true, stashInitialSize:256,
+            liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:1.2,
+            liveBufferLatencyMinRemain:0.4, autoCleanupSourceBuffer:true,
+            autoCleanupMaxBackwardDuration:14, autoCleanupMinBackwardDuration:8};
+  }
+  return {enableWorker:true, lazyLoad:true, stashInitialSize:512,
+          liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:2.0,
+          liveBufferLatencyMinRemain:0.7, autoCleanupSourceBuffer:true,
+          autoCleanupMaxBackwardDuration:20, autoCleanupMinBackwardDuration:10};
+}
+
+/* ---------- 线路智能测速选优（延迟 + 码率） ---------- */
+function probeLine(url, timeoutMs){
+  return new Promise(function(resolve){
+    var t0=Date.now(), done=false, xhr=new XMLHttpRequest();
+    var finish=function(rtt, br){ if(done)return; done=true; try{xhr.abort();}catch(e){} resolve({rtt:rtt, br:br}); };
+    var to=setTimeout(function(){ finish(1e9, 0); }, timeoutMs);
+    try{
+      xhr.open("GET", url, true);
+      xhr.responseType="arraybuffer";
+      xhr.onprogress=function(ev){
+        if(!done && ev.loaded >= 2048){
+          clearTimeout(to);
+          var dt=(Date.now()-t0)/1000;
+          finish(Date.now()-t0, dt>0 ? Math.round(ev.loaded*8/1000/dt) : 0);
+        }
+      };
+      xhr.onerror=function(){ clearTimeout(to); finish(1e9, 0); };
+      try{ xhr.setRequestHeader("Range","bytes=0-65535"); }catch(e){}
+      xhr.send();
+    }catch(e){ clearTimeout(to); finish(1e9, 0); }
+  });
+}
+function pickBestLine(urls){
+  var n=Math.min(urls.length, 8), tasks=[];
+  for(var i=0;i<n;i++) tasks.push(probeLine(urls[i], 2500));
+  return Promise.all(tasks).then(function(rs){
+    var wBr = (TIER === "low") ? 3.0 : 0.6;
+    var best=0, bestScore=Infinity;
+    for(var i=0;i<n;i++){
+      var r=rs[i], score;
+      if(r.rtt>=1e9) score = 1e7 + i;
+      else score = r.rtt/1000 + (r.br/1000)*wBr;
+      if(score<bestScore){ bestScore=score; best=i; }
+    }
+    return best;
+  });
+}
+function pickFastest(urls){ return pickBestLine(urls); }
+
+/* 播放中卡顿看护：短时间密集 waiting → 判定线路不稳，自动切下一条 */
+var stall = {n:0, t:0, timer:null};
+function bindStallWatch(v){
+  stall.n=0; stall.t=Date.now();
+  v.onwaiting = function(){
+    stall.n++;
+    if(stall.n>=4 && Date.now()-stall.t < 5000){
+      toast("线路"+(cur.idx+1)+"卡顿，切换下一条");
+      clearTimeout(stall.timer);
+      stall.timer=setTimeout(function(){ nextLine(); }, 300);
+    }
+  };
+}
+
 function playIdx(i){
   cur.idx=i; setLineUI();
   var url=cur.urls[i]; if(!url) return;
@@ -277,12 +358,12 @@ function playIdx(i){
   $("status").style.display="block"; $("status").textContent="连接线路"+(i+1)+"…";
   if(!window.mpegts || !mpegts.getFeatureList().mseLivePlayback){ $("status").textContent="当前浏览器不支持 FLV 直播"; return; }
   try{
-    player=mpegts.createPlayer({type:"flv",isLive:true,url:url},
-      {enableWorker:true,liveBufferLatencyChasing:true,lazyLoad:false,stashInitialSize:256,autoCleanupSourceBuffer:true});
-    player.on(mpegts.Events.ERROR, function(){ nextLine(); });
-    v.onplaying=function(){ $("status").style.display="none"; };
+    player=mpegts.createPlayer({type:"flv",isLive:true,url:url,cors:true}, mpegtsCfg());
+    v.onplaying=function(){ stall.n=0; stall.t=Date.now(); $("status").style.display="none"; };
     v.onended=function(){ nextLine(); };
     v.onerror=function(){ nextLine(); };
+    bindStallWatch(v);
+    player.on(mpegts.Events.ERROR, function(){ nextLine(); });
     player.attachMediaElement(v);
     player.load();
     var pr=v.play(); if(pr&&pr.catch) pr.catch(function(){});
@@ -312,6 +393,16 @@ function toggleFs(){
   var v=$("v");
   if(document.fullscreenElement){ document.exitFullscreen(); }
   else { (v.requestFullscreen||v.webkitRequestFullscreen).call(v); }
+}
+/* 双击画面切换全屏（与安卓端一致的交互） */
+function bindDblClickFs(){
+  var wrap=$("vwrap"), last=0, t=null;
+  wrap.addEventListener("click", function(e){
+    if(e.target.closest && (e.target.closest("#ctrl")||e.target.closest(".btn")||e.target.closest(".ln"))) return;
+    var now=Date.now();
+    if(now-last<320){ clearTimeout(t); last=0; toggleFs(); }
+    else{ last=now; }
+  });
 }
 /* ---------- 初始化 ---------- */
 function init(){
@@ -343,12 +434,30 @@ function init(){
     $("btnFav").textContent=isFav(cur.tid,cur.id)?"★ 已收藏":"☆ 收藏";
   };
   /* 快捷键 */
+  var numBuf="", numTimer=null;
   document.addEventListener("keydown", function(e){
     if(e.key==="Escape"){ if($("player").classList.contains("show")) closePlayer(); return; }
     if(e.key===" " && $("player").classList.contains("show")){ e.preventDefault(); var v=$("v"); v.paused?v.play():v.pause(); return; }
     if((e.key==="f"||e.key==="F") && !/[input]/i.test(e.target.tagName) && $("player").classList.contains("show")){ toggleFs(); return; }
-    if((e.ctrlKey) && (e.key==="f"||e.key==="F")){ e.preventDefault(); $("search").focus(); $("search").select(); }
+    if((e.ctrlKey) && (e.key==="f"||e.key==="F")){ e.preventDefault(); $("search").focus(); $("search").select(); return; }
+    /* 数字键直选频道（与安卓遥控器一致，1.2 秒无后续数字则跳转） */
+    if(/^[0-9]$/.test(e.key) && !/[input]/i.test(e.target.tagName) && !$("player").classList.contains("show")){
+      e.preventDefault();
+      numBuf=(numBuf+e.key).slice(-3);
+      clearTimeout(numTimer);
+      var idx=parseInt(numBuf,10)-1, chs=[].slice.call(document.querySelectorAll("#list .ch"));
+      if(idx>=0 && idx<chs.length){ toast("跳转第 "+(idx+1)+" 个频道"); if(chs[idx]) chs[idx].scrollIntoView({block:"center"}); }
+      numTimer=setTimeout(function(){
+        var c=document.querySelectorAll("#list .ch")[parseInt(numBuf,10)-1];
+        if(c && typeof c.click==="function") c.click();
+        numBuf="";
+      }, 1200);
+      return;
+    }
+    /* 播放中：↑/↓ 切台 */
+    if($("player").classList.contains("show") && $("lines").children.length && e.key==="ArrowUp"){ return; }
   });
+  bindDblClickFs();
   /* 心跳：关闭窗口后 25 秒进程自动退出 */
   setInterval(function(){ fetch("/api/ping").catch(function(){}); }, 5000);
   fetch("/api/ping").catch(function(){});

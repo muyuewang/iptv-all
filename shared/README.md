@@ -28,6 +28,17 @@
 | 收藏 | `load_fav()/save_fav()` | `favArr()/favSave()/isFav()/toggleFav()` |
 | 缓存 TTL | `CACHE_TTL` | `CACHE_TTL` |
 
+> **UI / 播放层逻辑不在这份核心内**。全屏、横屏、手势、选路、缓冲策略属于「呈现层」，
+> 各端按平台能力自行实现：
+>
+> | 能力 | 安卓（`player.html` + `MainActivity.java`） | 桌面（`index.html`） |
+> |---|---|---|
+> | 全屏 | `setFsMode()` 走原生 `NativeBridge.setLandscape()` 真转屏 | `toggleFs()` 走 Web Fullscreen API |
+> | 双击画面切全屏 | `bindTouchGestures()` | `bindDblClickFs()` |
+> | 数字键直选频道 | `numBuf` + 1.2s 缓冲 | 同逻辑（键盘数字键） |
+> | 线路测速选优 | `probeLine()` / `pickBestLine()` | 同名函数，档位权重不同 |
+> | 缓冲策略 | `mpegtsCfg()` 按 `TIER` 分三档 | 同结构，档位阈值更宽松 |
+
 ### 为什么台标匹配只在 JS 版
 台标（`logos.js`）是纯前端资源，桌面端由浏览器直接引用、安卓端由 WebView 直接引用，
 Python 侧不需要这份逻辑。

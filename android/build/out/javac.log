@@ -1,0 +1,174 @@
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:13: 错误: 程序包androidx.media3.common不存在
+import androidx.media3.common.MediaItem;
+                             ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:14: 错误: 程序包androidx.media3.common不存在
+import androidx.media3.common.PlaybackException;
+                             ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:15: 错误: 程序包androidx.media3.common不存在
+import androidx.media3.common.Player;
+                             ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:16: 错误: 程序包androidx.media3.common不存在
+import androidx.media3.common.Tracks;
+                             ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:17: 错误: 程序包androidx.media3.common不存在
+import androidx.media3.common.VideoSize;
+                             ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:18: 错误: 程序包androidx.media3.common.util不存在
+import androidx.media3.common.util.UnstableApi;
+                                  ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:19: 错误: 程序包androidx.media3.datasource不存在
+import androidx.media3.datasource.DefaultDataSource;
+                                 ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:20: 错误: 程序包androidx.media3.datasource不存在
+import androidx.media3.datasource.DefaultHttpDataSource;
+                                 ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:21: 错误: 程序包androidx.media3.exoplayer不存在
+import androidx.media3.exoplayer.DefaultLoadControl;
+                                ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:22: 错误: 程序包androidx.media3.exoplayer不存在
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+                                ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:23: 错误: 程序包androidx.media3.exoplayer不存在
+import androidx.media3.exoplayer.ExoPlayer;
+                                ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:24: 错误: 程序包androidx.media3.exoplayer.source不存在
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+                                       ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:25: 错误: 程序包androidx.media3.exoplayer.trackselection不存在
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
+                                               ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:48: 错误: 找不到符号
+@UnstableApi
+ ^
+  符号: 类 UnstableApi
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:61: 错误: 找不到符号
+    private ExoPlayer player;
+            ^
+  符号:   类 ExoPlayer
+  位置: 类 NativePlayer
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:92: 错误: 找不到符号
+    private DefaultRenderersFactory buildRenderers() {
+            ^
+  符号:   类 DefaultRenderersFactory
+  位置: 类 NativePlayer
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:137: 错误: 找不到符号
+    private MediaItem buildItem(String url) {
+            ^
+  符号:   类 MediaItem
+  位置: 类 NativePlayer
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:93: 错误: 找不到符号
+        DefaultRenderersFactory f = new DefaultRenderersFactory(ctx);
+        ^
+  符号:   类 DefaultRenderersFactory
+  位置: 类 NativePlayer
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:93: 错误: 找不到符号
+        DefaultRenderersFactory f = new DefaultRenderersFactory(ctx);
+                                        ^
+  符号:   类 DefaultRenderersFactory
+  位置: 类 NativePlayer
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:95: 错误: 找不到符号
+        f.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER);
+                                   ^
+  符号:   变量 DefaultRenderersFactory
+  位置: 类 NativePlayer
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:138: 错误: 程序包MediaItem不存在
+        MediaItem.LiveConfiguration liveCfg = new MediaItem.LiveConfiguration.Builder()
+                 ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:138: 错误: 程序包MediaItem.LiveConfiguration不存在
+        MediaItem.LiveConfiguration liveCfg = new MediaItem.LiveConfiguration.Builder()
+                                                                             ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:141: 错误: 程序包MediaItem不存在
+        return new MediaItem.Builder()
+                            ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:162: 错误: 程序包DefaultHttpDataSource不存在
+                DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                                     ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:162: 错误: 程序包DefaultHttpDataSource不存在
+                DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                                                                              ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:167: 错误: 程序包DefaultDataSource不存在
+                DefaultDataSource.Factory ds = new DefaultDataSource.Factory(ctx, http);
+                                 ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:167: 错误: 程序包DefaultDataSource不存在
+                DefaultDataSource.Factory ds = new DefaultDataSource.Factory(ctx, http);
+                                                                    ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:169: 错误: 找不到符号
+                DefaultTrackSelector trackSelector = new DefaultTrackSelector(ctx);
+                ^
+  符号: 类 DefaultTrackSelector
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:169: 错误: 找不到符号
+                DefaultTrackSelector trackSelector = new DefaultTrackSelector(ctx);
+                                                         ^
+  符号: 类 DefaultTrackSelector
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:180: 错误: 找不到符号
+                DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                ^
+  符号: 类 DefaultLoadControl
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:180: 错误: 程序包DefaultLoadControl不存在
+                DefaultLoadControl loadControl = new DefaultLoadControl.Builder()
+                                                                       ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:189: 错误: 程序包ExoPlayer不存在
+                ExoPlayer.Builder b = new ExoPlayer.Builder(ctx, buildRenderers())
+                         ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:190: 错误: 找不到符号
+                        .setMediaSourceFactory(new DefaultMediaSourceFactory(ds))
+                                                   ^
+  符号: 类 DefaultMediaSourceFactory
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:189: 错误: 程序包ExoPlayer不存在
+                ExoPlayer.Builder b = new ExoPlayer.Builder(ctx, buildRenderers())
+                                                   ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:196: 错误: 找不到符号
+                player.setRepeatMode(Player.REPEAT_MODE_OFF);
+                                     ^
+  符号: 变量 Player
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:198: 错误: 程序包Player不存在
+                player.addListener(new Player.Listener() {
+                                             ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:207: 错误: 找不到符号
+                    @Override public void onVideoSizeChanged(VideoSize size) {
+                                                             ^
+  符号: 类 VideoSize
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:213: 错误: 找不到符号
+                    @Override public void onPlayerError(PlaybackException error) {
+                                                        ^
+  符号: 类 PlaybackException
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:217: 错误: 找不到符号
+                    @Override public void onTracksChanged(Tracks tracks) {
+                                                          ^
+  符号: 类 Tracks
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:199: 错误: 方法不会覆盖或实现超类型的方法
+                    @Override public void onPlaybackStateChanged(int st) {
+                    ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:201: 错误: 程序包Player不存在
+                            case Player.STATE_BUFFERING: emit("buffering", "native"); break;
+                                       ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:202: 错误: 程序包Player不存在
+                            case Player.STATE_READY:     emit("ready", "native"); break;
+                                       ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:203: 错误: 程序包Player不存在
+                            case Player.STATE_ENDED:     emit("ended", "native"); break;
+                                       ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:204: 错误: 程序包Player不存在
+                            case Player.STATE_IDLE:      break;
+                                       ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:207: 错误: 方法不会覆盖或实现超类型的方法
+                    @Override public void onVideoSizeChanged(VideoSize size) {
+                    ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:210: 错误: 方法不会覆盖或实现超类型的方法
+                    @Override public void onIsPlayingChanged(boolean isPlaying) {
+                    ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:213: 错误: 方法不会覆盖或实现超类型的方法
+                    @Override public void onPlayerError(PlaybackException error) {
+                    ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:217: 错误: 方法不会覆盖或实现超类型的方法
+                    @Override public void onTracksChanged(Tracks tracks) {
+                    ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:256: 错误: 程序包androidx.media3.common不存在
+            androidx.media3.common.Format vf = player.getVideoFormat();
+                                  ^
+C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\NativePlayer.java:278: 错误: 程序包androidx.media3.common不存在
+            androidx.media3.common.Format vf = player == null ? null : player.getVideoFormat();
+                                  ^
+注: C:\Users\fengxin\WorkBuddy\2026-10-09-14-02-22\tv_all\android\app\src\com\clean\tv\MainActivity.java使用或覆盖了已过时的 API。
+注: 有关详细信息, 请使用 -Xlint:deprecation 重新编译。
+50 个错误
