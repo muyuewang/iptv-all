@@ -125,6 +125,22 @@
     background:rgba(12,13,18,.86);-webkit-backdrop-filter:blur(20px) saturate(160%);
     backdrop-filter:blur(20px) saturate(160%);border-top:1px solid var(--line);
     transition:opacity .3s var(--ease);}
+
+  /* ================= 原生硬解模式（v1.4） =================
+     画面由原生 SurfaceView 输出（挂在 WebView 之下，全屏铺满）。
+     此时网页这一层要整体透明化：html/body 透明、频道列表隐藏、<video> 隐藏，
+     只保留控制条浮层可见可点 —— 否则会盖住原生画面。
+     依赖 MainActivity 侧 WebView.setBackgroundColor(TRANSPARENT)。 */
+  html.native-on, body.native-on{background:transparent;background-image:none;}
+  body.native-on header, body.native-on #scroller{display:none;}
+  body.native-on #player{background:transparent;}
+  body.native-on #vwrap{visibility:hidden;background:transparent;}
+  body.native-on #status{color:#e6e9f0;}
+  /* 原生模式下控制条贴底（画面由原生铺满，控制条浮在其上） */
+  body.native-on #ctrl{position:absolute;left:0;right:0;bottom:0;z-index:2;border-top:none;
+    background:linear-gradient(transparent,rgba(8,9,13,.72) 34%,rgba(8,9,13,.95));
+    padding-top:52px;}
+  body.native-on #ctrl.hide{opacity:0;pointer-events:none;}
   #pbar{display:flex;align-items:center;gap:8px;padding:11px 14px;color:var(--fg);font-size:13px;flex-wrap:wrap;}
   #cname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;
     min-width:120px;letter-spacing:-.01em;}
@@ -400,7 +416,11 @@ var NATIVE = {
   ok: false,        /* 原生桥是否可用（开机探测一次） */
   active: false,    /* 当前是否正在走原生播放 */
   probing: false,
-  lastUrl: ""
+  lastUrl: "",
+  timer: null,      /* 卡死看护定时器 */
+  lastPos: 0,       /* 上一次读到的播放位置（判断是否零推进） */
+  stallN: 0,
+  stallT: 0
 };
 
 function hasNative(){
@@ -464,6 +484,7 @@ function playNative(url){
   try{
     NATIVE.active = true; NATIVE.probing = true; NATIVE.lastUrl = url;
     NATIVE.lastPos = 0; NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+    try{ document.documentElement.classList.add("native-on"); document.body.classList.add("native-on"); }catch(e){}
     var r = NativeTV.nativePlay(url);
     /* 切线路时用 nativeSwitch（保播放器实例，避免黑屏）；首次播放用 nativePlay */
     $("status").style.display = "block"; $("status").textContent = "连接线路"+(cur.idx+1)+"…";
@@ -486,6 +507,7 @@ function nativeSwitch(url){
 function nativeStop(){
   NATIVE.active = false;
   clearInterval(NATIVE.timer);
+  try{ document.documentElement.classList.remove("native-on"); document.body.classList.remove("native-on"); }catch(e){}
   try{ if(window.NativeTV && NativeTV.nativeStop) NativeTV.nativeStop(); }catch(e){}
 }
 

@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.KeyEvent;
@@ -147,6 +148,10 @@ public class MainActivity extends Activity {
 
         root = new FrameLayout(this);
         web = new WebView(this);
+        // ★ 原生硬解：WebView 背景透明，让下方的 SurfaceView 画面透出来
+        //   （网页在 native-on 模式下也会把 body/列表置透明，只留控制条浮层）
+        web.setBackgroundColor(Color.TRANSPARENT);
+        root.setBackgroundColor(Color.BLACK);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);

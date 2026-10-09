@@ -30,13 +30,19 @@ D8="${D8:-java -cp $R8 com.android.tools.r8.D8}"
 
 # ---- 媒体库 classpath（media3 硬解通道）----
 # 无 gradle，手工收集全部依赖 jar；Windows 用 ';' 分隔，类 Unix 用 ':'。
+# ★ 关键：javac 的 -classpath 是「;」分隔的单个参数，Git Bash/MSYS 不会把
+#   其中的 /c/... POSIX 路径自动转成 Windows 路径，javac 就会报「程序包不存在」。
+#   所以这里必须用 cygpath -w 显式转成 C:\... 再拼。
 M3CP=""
 if [ -d "$M3LIB" ]; then
   for j in "$M3LIB"/*.jar; do
     [ -f "$j" ] || continue
-    if [ -z "$M3CP" ]; then M3CP="$j"; else M3CP="$M3CP;$j"; fi
+    wj=$(cygpath -w "$j" 2>/dev/null || echo "$j")
+    if [ -z "$M3CP" ]; then M3CP="$wj"; else M3CP="$M3CP;$wj"; fi
   done
 fi
+# javac 的 -classpath 同时要带上 android.jar（已转 Windows 路径）
+AJAR_WIN=$(cygpath -w "$AJAR" 2>/dev/null || echo "$AJAR")
 
 # ---- 同步共享核心（单一真源在 ../shared/web/tv_core.js）----
 cp -f "$HERE/../shared/web/tv_core.js" "$APP/assets/tv_core.js"
@@ -65,13 +71,20 @@ fi
 echo "== 2/5 javac（Java 源码）=="
 mkdir -p "$OUT/classes"
 SRCS=$(find "$APP/src" "$OUT/gen" -name "*.java" 2>/dev/null | tr '\n' ' ')
+set +e
 $JAVAC -encoding UTF-8 -source 8 -target 8 -Xlint:-options -nowarn \
-  -bootclasspath "$AJAR" -classpath "$AJAR;$M3CP" \
-  -d "$OUT/classes" $SRCS > "$OUT/javac.log" 2>&1 || true
-# javac 输出可能是 UTF-16（Windows JDK 默认），先转码再过滤噪声行
-iconv -f UTF-16LE -t UTF-8 "$OUT/javac.log" 2>/dev/null | tr -d '\000' > "$OUT/javac.u8" \
-  || tr -d '\000' < "$OUT/javac.log" > "$OUT/javac.u8"
-grep -v "警告\|warning\|bootstrap\|系统模块\|source value 8\|target value 8\|已过时\|deprecat\|^注:\|^Note:" "$OUT/javac.u8" || true
+  -bootclasspath "$AJAR" -classpath "$AJAR_WIN;$M3CP" \
+  -d "$OUT/classes" $SRCS > "$OUT/javac.log" 2>&1
+JAVAC_EXIT=$?
+set -e
+if [ $JAVAC_EXIT -ne 0 ]; then
+  echo "javac 失败 (exit=$JAVAC_EXIT)，错误如下："
+  # Windows JDK 输出是 GBK，转成 UTF-8 后再打印（失败行含「错误/error」）
+  iconv -f GBK -t UTF-8 "$OUT/javac.log" 2>/dev/null | grep -a "错误\|error\|不存在\|找不到" \
+    || iconv -f GBK -t UTF-8 "$OUT/javac.log" 2>/dev/null \
+    || cat "$OUT/javac.log"
+  exit 1
+fi
 
 echo "== 3/5 d8（转 dex，多 dex）=="
 mkdir -p "$OUT/dex"
