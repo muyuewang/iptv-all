@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>纯净电视直播</title>
+<!-- 共享核心：频道/解密/EPG/台标/收藏，与桌面端 shared/core.py 逻辑对齐 -->
+<script src="logos.js"></script>
+<script src="mpegts.js"></script>
+<script src="tv_core.js"></script>
+<style>
+  :root{--bg:#0f1115;--card:#1a1d24;--fg:#e8eaed;--sub:#9aa0a6;--accent:#e53935;--line:#2a2e37;--gold:#f5b400;}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;}
+  header{position:sticky;top:0;z-index:10;background:var(--bg);padding:10px 12px 8px;border-bottom:1px solid var(--line);}
+  #title{font-size:16px;font-weight:600;margin:0 0 8px;display:flex;align-items:center;gap:6px;}
+  #title b{color:var(--accent);}
+  #search{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:14px;outline:none;}
+  #search:focus{border-color:var(--accent);}
+  #scroller{height:calc(100% - 96px);overflow:auto;}
+  #tabs{display:flex;gap:8px;overflow-x:auto;padding:10px 12px;scrollbar-width:none;}
+  #tabs::-webkit-scrollbar,#scroller::-webkit-scrollbar{display:none;}
+  .tab{flex:0 0 auto;padding:7px 14px;border-radius:999px;background:var(--card);border:1px solid var(--line);font-size:13px;color:var(--sub);cursor:pointer;}
+  .tab.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;}
+  #list{padding:4px 12px 40px;display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .ch{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:13.5px;
+      display:flex;align-items:center;gap:8px;color:var(--fg);cursor:pointer;position:relative;min-height:46px;}
+  .ch .lg{width:34px;height:26px;flex:0 0 34px;object-fit:contain;background:#0b0d11;border-radius:4px;}
+  .ch .bd{width:34px;height:26px;flex:0 0 34px;border-radius:4px;display:flex;align-items:center;justify-content:center;
+      font-size:11px;font-weight:700;background:#2b303b;color:#cfd4dc;overflow:hidden;}
+  .ch .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .ch .star{position:absolute;right:4px;top:2px;font-size:13px;color:#3a3f4a;padding:2px 4px;}
+  .ch .star.on{color:var(--gold);}
+  #hint{color:var(--sub);font-size:13px;padding:20px 4px;text-align:center;grid-column:1/-1;}
+  .tab:focus,.ch:focus,.ln:focus,.btn:focus{outline:3px solid var(--gold);outline-offset:2px;background:#232833;}
+  #player{position:fixed;inset:0;background:#000;z-index:50;display:none;flex-direction:column;}
+  #player.show{display:flex;}
+  #vwrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;flex:0 0 auto;}
+  video{width:100%;height:100%;background:#000;display:block;}
+  #status{margin:auto;color:#bbb;font-size:14px;text-align:center;padding:0 24px;position:absolute;left:0;right:0;top:42%;}
+  #ctrl{display:flex;flex-direction:column;background:#0b0d11;transition:opacity .25s;}
+  #pbar{display:flex;align-items:center;gap:8px;padding:8px 12px;color:var(--fg);font-size:13px;flex-wrap:wrap;}
+  #cname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;min-width:120px;}
+  .btn{padding:8px 12px;border-radius:8px;background:var(--line);border:none;color:var(--fg);font-size:13px;cursor:pointer;}
+  .btn.act{background:var(--accent);color:#fff;}
+  #lines{display:flex;gap:6px;overflow-x:auto;padding:8px 12px;scrollbar-width:none;}
+  #lines::-webkit-scrollbar{display:none;}
+  .ln{flex:0 0 auto;padding:6px 12px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--sub);font-size:12.5px;cursor:pointer;}
+  .ln.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+  #epg{display:none;overflow:auto;max-height:34vh;}
+  #epg.show{display:block;}
+  #epg .row{display:flex;gap:10px;padding:9px 14px;border-bottom:1px solid #171a20;font-size:13px;}
+  #epg .row.now{background:#1d2530;color:#fff;}
+  #epg .row .tm{color:var(--sub);flex:0 0 46px;font-variant-numeric:tabular-nums;}
+  #epg .row.now .tm{color:var(--gold);}
+  #epg .row .pg{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #epg .row .rb{color:var(--sub);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:0 5px;}
+  #toast{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;
+     padding:9px 16px;border-radius:20px;font-size:13px;z-index:99;opacity:0;transition:.25s;pointer-events:none;}
+  #toast.show{opacity:1;}
+
+  /* ================= TV(大屏 10-foot) 模式 ================= */
+  body.tv{font-size:18px;}
+  body.tv #title{font-size:26px;padding:18px 28px 0;margin:0;}
+  body.tv #search{display:none;}
+  body.tv header{padding:0;border-bottom:none;background:transparent;}
+  body.tv #scroller{height:calc(100% - 84px);}
+  body.tv #tabs{padding:16px 28px 10px;gap:14px;}
+  body.tv .tab{font-size:20px;padding:12px 26px;border-radius:999px;}
+  body.tv #list{grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;padding:8px 28px 40px;}
+  body.tv .ch{min-height:96px;padding:14px 16px;border-radius:14px;font-size:20px;gap:14px;border-width:2px;}
+  body.tv .ch .lg{width:84px;height:62px;flex:0 0 84px;border-radius:8px;}
+  body.tv .ch .bd{width:84px;height:62px;flex:0 0 84px;font-size:26px;border-radius:8px;}
+  body.tv .ch .star{font-size:22px;right:12px;top:8px;}
+  body.tv .ch:focus{outline:5px solid var(--gold);outline-offset:3px;transform:scale(1.03);}
+  body.tv #hint{font-size:20px;padding:60px 10px;}
+  body.tv #player{display:none;}
+  body.tv #player.show{display:block;}
+  body.tv #vwrap{position:absolute;inset:0;height:100%;aspect-ratio:auto;}
+  body.tv #status{top:44%;font-size:22px;}
+  body.tv #ctrl{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.92) 30%);
+     padding-top:40px;transition:opacity .3s;}
+  body.tv #ctrl.hide{opacity:0;pointer-events:none;}
+  body.tv #pbar{padding:14px 32px;font-size:20px;gap:14px;}
+  body.tv .btn{font-size:20px;padding:12px 22px;border-radius:10px;}
+  body.tv #lines{padding:10px 32px 20px;gap:12px;}
+  body.tv .ln{font-size:18px;padding:10px 20px;}
+  body.tv #epg{max-height:46vh;font-size:20px;}
+  body.tv #epg .row{padding:14px 32px;}
+  body.tv #epg .row .tm{flex:0 0 70px;}
+</style>
+</head>
+<body>
+<header>
+  <div id="title">📺 纯净电视直播 <b>·</b> <span id="cnt" style="color:var(--sub);font-weight:400;font-size:0.72em"></span></div>
+  <input id="search" placeholder="搜索频道…" autocomplete="off">
+</header>
+<div id="scroller">
+  <div id="tabs"></div>
+  <div id="list"><div id="hint">正在加载频道…</div></div>
+</div>
+
+<div id="player">
+  <div id="vwrap"><video id="v" controls playsinline webkit-playsinline tabindex="0"></video></div>
+  <div id="status">正在解析线路…</div>
+  <div id="ctrl">
+    <div id="pbar">
+      <div id="cname">—</div>
+      <button class="btn" id="btnEpg" tabindex="0">节目单</button>
+      <button class="btn" id="btnFs" tabindex="0">全屏</button>
+      <button class="btn" id="btnFav" tabindex="0">收藏</button>
+      <button class="btn" id="btnClose" tabindex="0">返回</button>
+    </div>
+    <div id="lines"></div>
+    <div id="epg"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ==========================================================================
+ * UI 层：只负责渲染 / 交互 / 播放器
+ * 业务逻辑全部来自 TVCore（shared/web/tv_core.js），与桌面端 core.py 对齐
+ * ========================================================================*/
+var C = window.TVCore;
+var CATS = C.CATS;
+var IS_TV = /[?&]tv=1/.test(location.search) || window.innerWidth >= 960 || window.innerHeight >= 960;
+var cur = { tid:null, id:null, name:null, urls:[], idx:0, epg:[] };
+var player = null, ctrlTimer = null;
+var curCat = "tv", allChans = [];
+
+function $(id){ return document.getElementById(id); }
+function toast(t){ var e=$("toast"); e.textContent=t; e.classList.add("show"); clearTimeout(e._t); e._t=setTimeout(function(){e.classList.remove("show");},1600); }
+function logoSrc(n){ return C.logoSrc(n, window.LOGOS); }
+function favArr(){ return C.favArr(); }
+function isFav(t,i){ return C.isFav(t,i); }
+
+/* ---------- 收藏 ---------- */
+function toggleFav(tid,id,name){
+  var added = C.toggleFav(tid,id,name);
+  toast(added ? "已收藏" : "已取消收藏");
+  if(curCat==="fav") loadCat("fav");
+}
+
+/* ---------- EPG ---------- */
+function renderEpg(){
+  var box=$("epg"); box.innerHTML="";
+  if(!cur.epg.length){ box.innerHTML='<div class="row"><div class="pg">暂无节目单</div></div>'; return; }
+  var now=new Date(), hm=("0"+now.getHours()).slice(-2)+":"+("0"+now.getMinutes()).slice(-2), idx=-1;
+  for(var i=0;i<cur.epg.length;i++){ if(cur.epg[i].time<=hm) idx=i; }
+  cur.epg.forEach(function(p,i){
+    var d=document.createElement("div"); d.className="row"+(i===idx?" now":"");
+    d.innerHTML='<div class="tm">'+p.time+'</div><div class="pg">'+p.name+'</div>'+(i===idx?'<div class="rb">直播中</div>':'');
+    box.appendChild(d);
+  });
+}
+
+/* ---------- 播放 ---------- */
+function openChannel(tid, id, name){
+  cur.tid=tid; cur.id=id; cur.name=name; cur.urls=[]; cur.idx=0; cur.epg=[];
+  $("cname").textContent=name;
+  $("btnFav").className="btn"+(isFav(tid,id)?" act":"");
+  $("btnFav").textContent=isFav(tid,id)?"★ 已收藏":"☆ 收藏";
+  $("btnEpg").className="btn"; $("epg").classList.remove("show");
+  $("ctrl").classList.remove("hide"); resetCtrlTimer();
+  $("player").classList.add("show");
+  $("status").style.display="block"; $("status").textContent="正在解析线路…";
+  $("lines").innerHTML="";
+  C.fetchPlay(tid, id).then(function(res){
+    cur.epg = res.epg || [];
+    if(!res.urls.length){ $("status").textContent="线路解析失败，请返回重进刷新令牌"; return; }
+    cur.urls=res.urls; renderLines(); playIdx(0);
+    if(IS_TV){ var f=document.querySelector("#lines .ln"); if(f) f.focus(); }
+  }).catch(function(e){ $("status").textContent="网络错误："+e; });
+}
+function renderLines(){
+  var w=$("lines"); w.innerHTML="";
+  cur.urls.forEach(function(u,i){
+    var d=document.createElement("div"); d.className="ln"+(i===cur.idx?" on":""); d.textContent="线路"+(i+1);
+    d.tabIndex=0; d.onclick=function(){ playIdx(i); };
+    w.appendChild(d);
+  });
+}
+function setLineUI(){ var ls=$("lines").children; for(var i=0;i<ls.length;i++) ls[i].className="ln"+(i===cur.idx?" on":""); }
+function playIdx(i){
+  cur.idx=i; setLineUI();
+  var url=cur.urls[i]; if(!url) return;
+  if(player){ try{player.destroy();}catch(e){} player=null; }
+  var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  $("status").style.display="block"; $("status").textContent="连接线路"+(i+1)+"…";
+  if(!window.mpegts || !mpegts.getFeatureList().mseLivePlayback){ $("status").textContent="当前设备不支持 FLV 直播播放"; return; }
+  player=mpegts.createPlayer({type:"flv", isLive:true, url:url},
+      {enableWorker:true, liveBufferLatencyChasing:true, lazyLoad:false, stashInitialSize:128, autoCleanupSourceBuffer:true});
+  player.on(mpegts.Events.ERROR, function(){ nextLine(); });
+  v.onplaying=function(){ $("status").style.display="none"; };
+  v.onended=function(){ nextLine(); };
+  v.onerror=function(){ nextLine(); };
+  player.attachMediaElement(v);
+  try{ player.load(); v.play(); }catch(e){ nextLine(); }
+}
+function nextLine(){
+  if(cur.idx+1 < cur.urls.length){ toast("线路"+(cur.idx+1)+"失败，切换下一条"); playIdx(cur.idx+1); }
+  else { $("status").style.display="block"; $("status").textContent="所有线路均失败，请返回重进刷新令牌"; }
+}
+function closePlayer(){
+  if(player){ try{player.destroy();}catch(e){} player=null; }
+  var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  $("player").classList.remove("show");
+  if(IS_TV){ var f=document.querySelector(".ch"); if(f) f.focus(); }
+}
+function toggleFs(){
+  var v=$("v");
+  if(document.fullscreenElement||document.webkitFullscreenElement){ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }
+  else { (v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen).call(v); }
+}
+function resetCtrlTimer(){
+  clearTimeout(ctrlTimer);
+  ctrlTimer=setTimeout(function(){
+    var p=$("player");
+    if(p.classList.contains("show") && !$("epg").classList.contains("show")){
+      $("ctrl").classList.add("hide");
+      if($("ctrl").contains(document.activeElement)){ try{ $("v").focus(); }catch(e){} }
+    }
+  }, 6000);
+}
+
+/* ---------- 列表渲染 ---------- */
+function renderChannels(){
+  var kw=IS_TV?"":($("search").value||"").trim().toLowerCase();
+  var list=$("list"); list.innerHTML="";
+  var src=(curCat==="fav")?favArr().map(function(f){return {id:f.id,name:f.name};}):allChans;
+  var arr=src.filter(function(c){ return !kw || c.name.toLowerCase().indexOf(kw)>=0; });
+  if(!arr.length){ list.innerHTML='<div id="hint">'+(curCat==="fav"?"还没有收藏，按★键收藏频道":"无匹配频道")+'</div>'; return; }
+  arr.forEach(function(c){
+    var d=document.createElement("div"); d.className="ch"; d.tabIndex=0;
+    var lg=logoSrc(c.name);
+    d.innerHTML=(lg?'<img class="lg" src="'+lg+'" onerror="this.style.display=\'none\'">':'<div class="bd">'+c.name.slice(0,2)+'</div>')
+              + '<div class="nm">'+c.name+'</div>'
+              + '<div class="star'+(isFav(curCat,c.id)?" on":"")+'" tabindex="-1">★</div>';
+    d.onclick=function(){ openChannel(curCat, c.id, c.name); };
+    var st=d.querySelector(".star");
+    st.onclick=function(ev){ ev.stopPropagation(); toggleFav(curCat,c.id,c.name); st.className="star"+(isFav(curCat,c.id)?" on":""); };
+    d.oncontextmenu=function(ev){ ev.preventDefault(); toggleFav(curCat,c.id,c.name); return false; };
+    list.appendChild(d);
+  });
+}
+function loadCat(tid){
+  curCat=tid;
+  var ts=$("tabs").children; for(var i=0;i<ts.length;i++) ts[i].className="tab"+(ts[i].dataset.tid===tid?" on":"");
+  if(tid==="fav"){ allChans=[]; renderChannels(); $("cnt").textContent=favArr().length+" 个收藏"; if(IS_TV){var f=document.querySelector(".ch");if(f)f.focus();} return; }
+  $("list").innerHTML='<div id="hint">正在加载…</div>';
+  C.fetchChannels(tid).then(function(arr){
+    allChans=arr||[]; renderChannels(); $("cnt").textContent=allChans.length+" 个频道";
+    if(IS_TV){ var f=document.querySelector(".ch"); if(f) f.focus(); }
+  }).catch(function(){ $("list").innerHTML='<div id="hint">加载失败，请检查网络</div>'; });
+}
+
+/* ---------- 初始化 ---------- */
+function init(){
+  if(IS_TV) document.body.classList.add("tv");
+  var t=$("tabs");
+  var fav=document.createElement("div"); fav.className="tab"; fav.textContent="⭐ 收藏"; fav.dataset.tid="fav"; fav.tabIndex=0;
+  fav.onclick=function(){ loadCat("fav"); }; t.appendChild(fav);
+  CATS.forEach(function(c){
+    var d=document.createElement("div"); d.className="tab"; d.textContent=c[1]; d.dataset.tid=c[0]; d.tabIndex=0;
+    d.onclick=function(){ loadCat(c[0]); };
+    t.appendChild(d);
+  });
+  $("search").oninput=renderChannels;
+  $("btnClose").onclick=closePlayer;
+  $("btnFs").onclick=toggleFs;
+  $("btnEpg").onclick=function(){ var b=$("epg"); b.classList.toggle("show"); if(b.classList.contains("show")) renderEpg(); $("btnEpg").className="btn"+(b.classList.contains("show")?" act":""); resetCtrlTimer(); };
+  $("btnFav").onclick=function(){ toggleFav(cur.tid,cur.id,cur.name); $("btnFav").className="btn"+(isFav(cur.tid,cur.id)?" act":""); $("btnFav").textContent=isFav(cur.tid,cur.id)?"★ 已收藏":"☆ 收藏"; };
+
+  /* ===== 遥控器 / 键盘方向键导航（TV 版核心） ===== */
+  function listOf(sel){ return [].slice.call(document.querySelectorAll(sel)); }
+  function colsCount(){
+    var it=listOf("#list .ch"); if(!it.length) return 1;
+    var top=it[0].offsetTop, c=0;
+    for(var i=0;i<it.length;i++){ if(it[i].offsetTop===top) c++; else break; }
+    return c||1;
+  }
+  var OK=[23,13,66,160];
+  document.addEventListener("keydown", function(e){
+    var k=e.keyCode, ae=document.activeElement, inPlayer=$("player").classList.contains("show");
+    if(inPlayer){ $("ctrl").classList.remove("hide"); resetCtrlTimer();
+      var plist=listOf("#pbar .btn").concat(listOf("#lines .ln"));
+      if(plist.indexOf(ae)<0){
+        var fl=listOf("#lines .ln")[cur.idx]||listOf("#lines .ln")[0]; if(fl){ fl.focus(); return; }
+      }
+      var pi=plist.indexOf(ae);
+      if(OK.indexOf(k)>=0){ if(ae&&typeof ae.click==="function"&&ae.tagName!=="INPUT"){ ae.click(); } e.preventDefault(); return; }
+      if(k===37||k===38||k===39||k===40){ e.preventDefault();
+        if(pi<0){ if(plist[0]) plist[0].focus(); return; }
+        var np=plist[pi+((k===39||k===40)?1:-1)]; if(np) np.focus(); return; }
+      return;
+    }
+    var tabs=listOf("#tabs .tab"), chs=listOf("#list .ch");
+    var ti=tabs.indexOf(ae), ci=chs.indexOf(ae);
+    if(OK.indexOf(k)>=0){ e.preventDefault(); if(ae&&typeof ae.click==="function"&&ae.tagName!=="INPUT") ae.click(); return; }
+    if(k===37||k===39){
+      e.preventDefault();
+      var d=(k===39)?1:-1;
+      if(ti>=0){ var nt2=tabs[ti+d]; if(nt2) nt2.focus(); }
+      else if(ci>=0){ var nc=chs[ci+d]; if(nc) nc.focus(); }
+    } else if(k===40){
+      e.preventDefault();
+      if(ti>=0){ if(chs[0]) chs[0].focus(); }
+      else if(ci>=0){ var c=colsCount(), nd=chs[ci+c]; if(nd) nd.focus(); }
+    } else if(k===38){
+      e.preventDefault();
+      if(ci>=0){ var up=chs[ci-colsCount()]; if(up) up.focus(); else if(tabs[0]) tabs[0].focus(); }
+    }
+  });
+  loadCat("tv");
+}
+window.addEventListener("load", init);
+</script>
+</body>
+</html>

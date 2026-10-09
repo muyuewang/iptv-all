@@ -1,0 +1,17 @@
+# 构建产物
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+
+# 运行时生成（绿色版配置）
+fav.json
+tvlive.log
+.browser/
+
+# 安卓构建工具链（体积大，按需自备，见 README）
+android/tools/
+android/build/
+*.apk
+*.idsig
