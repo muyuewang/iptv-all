@@ -292,6 +292,66 @@ PyInstaller 单文件程序的启发式误报，加信任即可。程序只做�
 | v1.1 | 设计令牌统一、图标体系、TV 10-foot 遥控布局                  |
 | v1.2 | **播放优化**：码率感知选路、设备分级缓冲、WebView 硬解、卡顿自愈       |
 | v1.3 | **手机全屏自动横屏**、双击手势、遥控数字键直选、频道加减台、桌面双击全屏（详见下节） |
+| v1.4 | **原生硬解播放（ExoPlayer）**：MediaCodec 硬解根治卡顿，JS 软解保留兜底（详见下节） |
+| v1.5 | **兼容 Android 4.4 + 双后端硬解**：老 ExoPlayer2 后端（API 16+）、minSdk 降到 19、硬解失败防死循环、桌面端断流重连 |
+
+---
+
+## 原生硬解播放（v1.4 ~ v1.5）
+
+### 为什么要上硬解
+
+JS 软解（mpegts.js）的极限已在 v1.2 拉满：1080p@2.4Mbps 在 4 核低端机上
+20 秒只能推进 4.6 秒 → 调参后勉强 106%，但那已是软解天花板，源一重就卡。
+根治方案只有一条路：**把解码交给 MediaCodec 硬解（DSP），CPU 几乎不参与**。
+
+### 架构
+
+```
+网页 player.html                       原生层（MainActivity + NativePlayer）
+──────────────                        ─────────────────────────────
+点频道 → 测速选路 → playIdx(i)
+    ↓ 有原生桥？
+NativeTV.nativePlay(url)  ──────────→ NativePlayer.play(url)
+    │                                   ExoPlayer：FLV 解封装 → MediaCodec 硬解
+    │                                   画面 → TextureView（全屏，WebView 之下）
+    │ ← ─ ─ window.__onNativeState ─ ─  状态：buffering/ready/size/decoder/ended/error
+控制条浮层（网页画，原生画面之上）
+    │
+    └─ 原生不可用 / 播放报错 → 自动回落 mpegts.js 软解（兜底保留）
+```
+
+### 关键改动
+
+| 文件 | 改动 |
+| --- | --- |
+| `tools/fetch_media3.py` | 新增：从 maven 拉 media3 1.4.1 + androidx + kotlin + guava 共 19 个 jar（无 gradle 构建链的依赖收集器） |
+| `NativePlayer.java` | 新增：ExoPlayer 硬解播放层。TextureView 输出、直播低延迟（LiveConfiguration targetOffset 1.5s）、异步解码队列、软解自动回退、MediaCodecList 硬解探测 |
+| `MainActivity.java` | JS 桥新增 `hasNativePlay/nativePlay/nativeSwitch/nativePause/nativeResume/nativeStop/nativeStats/nativeHwDecode`；状态经 `window.__onNativeState(state,detail)` 透传网页；WebView 背景透明 |
+| `player.html` | `NATIVE` 通道：原生优先 → 软解兜底；`native-on` 模式（页面透明化只留控制条浮层）；断流自动重连同线路 ×2 再切线；stats 看护卡顿切线 |
+| `build.sh` | 多 jar classpath（**javac 的 `-classpath` 必须用 cygpath 转 Windows 路径**，MSYS 不转换 `;` 串内的 POSIX 路径）；d8 multi-dex；javac 失败立即终止（防止静默打出缺类 APK） |
+
+### 踩坑实录（无 gradle 手工构建 media3 的完整代价）
+
+| 坑 | 现象 | 解法 |
+| --- | --- | --- |
+| `DefaultLoadControl` 约束 | `minBufferMs cannot be less than bufferForPlaybackAfterRebufferMs` 崩溃 | `setBufferDurationsMs(6000, 30000, 1500, 3000)`，min ≥ rebuffer |
+| collection 1.4.0 是 KMP 包 | jar 里没有 `.class`，运行期 `CircularIntArray` NoClassDefFoundError | 改用 `collection-jvm` 1.4.0 |
+| Kotlin 运行时缺失 | d8 脱糖报 `kotlin.jvm.functions.*` not found | 补 `kotlin-stdlib` + `kotlinx-coroutines-core-jvm` |
+| kotlin-stdlib 超长路径 | 解包超 Windows MAX_PATH | 纯 jar 依赖不解包，直接复制 |
+| media3-ui 连坐 recyclerview | d8 报 RecyclerView not found | 不引入 media3-ui（用自己的画面层，用不到 PlayerView） |
+| **Player 线程检查** | JS 桥线程调 `player.getPlaybackState()` 抛 `wrong thread` 被 catch 吞掉 → stats 永远 `{}` | `statsSync()`：post 到主线程 + CountDownLatch 等待 |
+| **视频输出没绑定** | `attach()` 的绑定发生在 player 创建前 → 有声无画黑屏 | `play()` 里 build 后立刻 `setVideoTextureView(surface)` |
+| SurfaceView Z 序黑屏 | SurfaceView 独立图层 + WebView 透明的组合在部分环境整屏黑 | 改用 **TextureView**（画进应用窗口，合成必对；解码仍是硬解） |
+| MSYS 路径转换 | javac `-classpath "a;b"` 内的 `/c/...` 不被转换 → 「程序包不存在」 | `cygpath -w` 显式转换后拼接 |
+
+### 实测（LDPlayer 模拟器 / SM-N9700 伪装）
+
+- 1080p H.264 FLV 直播：`playing=true`，播放位置实时推进，无卡顿
+- MediaCodec 异步模式生效（`DMCodecAdapterFactory: asynchronous MediaCodec adapter`）
+- 断流自动重连同线路，不烧线路
+- 模拟器上 `hw=0/1` 取决于模拟器暴露的解码器；**真机上会命中 `OMX.qcom.* / c2.qti.*` 等硬解器**（探测逻辑已在位）
+- 模拟器 `screencap` 截不到媒体层（黑图）属已知模拟器缺陷，`screenrecord` 可见真实画面
 
 ---
 
@@ -355,6 +415,7 @@ MainActivity.applyOrientation()  →  setRequestedOrientation(SENSOR_LANDSCAPE)
 - ✅ **遥控器数字键直选频道**（1.2 秒缓冲，避免两位数频道误跳）
 - ✅ **遥控器 / 键盘 频道+/- 切台**
 - ✅ **单击画面唤出控制条**，6 秒无操作自动隐藏
+- ✅ **原生硬解播放（ExoPlayer / media3）**——MediaCodec 硬解根治 JS 软解卡顿，JS 软解保留兜底（见上节「原生硬解播放」）
 
 ### 近期可做（改造点已明确）
 
@@ -363,25 +424,21 @@ MainActivity.applyOrientation()  →  setRequestedOrientation(SENSOR_LANDSCAPE)
 
 - 改造点：`shared/core.py` 增加 `fetch_replay()`；`shared/web/tv_core.js` 同步 `fetchReplay()`
 - 前端：EPG 每条目加「回看」按钮，点了进播放层并标注「回看模式」
-- 风险：回看线路可能是 MP4/HLS，`mpegts.js` 不适用，需按 `type=` 分支播放器
+- 风险：回看线路可能是 MP4/HLS；HLS 已随 media3-exoplayer-hls 编入原生层可直接用，软解兜底需按 `type=` 分支
 
-**2. 硬解播放通道（彻底追平原版流畅度）**  
-当前是 `mpegts.js` 软解，天花板受 CPU 限制。要根治需原生播放器：
-
-- 方案 A：接入 **ExoPlayer**（`media3`），用 `addJavascriptInterface` 暴露 `play(url)`，  
-  WebView 只做 UI，解码走 ExoPlayer 硬解。改动量中等，效果最好。
-- 方案 B：`<video>` 直连（若源可直出 HLS/MP4）。需服务端配合，暂不可行。
-- 方案 C：保持软解，但低端机强制走 720p 以下线路（已在 `pickBestLine` 中预留评分权重）。
-
-**3. 手势增强**
+**2. 手势增强**
 
 - 上/下滑调亮度与音量（需 `NativeBridge` 增加 `setBrightness` / `setVolume`）
 - 横向滑动快进快退（直播场景可改为「切台」）
 - 长按画面唤出「锁定 / 画面比例」菜单
 
-**4. 画面比例切换**  
-`object-fit: contain` 目前写死。可加 `contain / cover / fill` 三态切换，  
-存 `localStorage`，适配非 16:9 的老节目源。
+**3. 画面比例切换**  
+网页侧 `object-fit: contain` 已写死；原生侧可用 `TextureView` 矩阵变换实现
+`contain / cover / fill / 16:9 / 4:3` 多态切换，存 `localStorage`，适配老节目源。
+
+**4. 桌面端（Windows/Linux）跟 进硬解**  
+Windows 可接 `libmpv`（`mpv --wid` 嵌入），Linux 同理；WebView 壳换成窗口内嵌 mpv 子窗口。
+原生安卓层的 JS 桥接口（`nativePlay/nativeSwitch/...`）可直接复用为跨端契约。
 
 **5. 开机自启与常驻**
 

@@ -5,14 +5,15 @@ media3-decoder.jar
 media3-extractor.jar
 media3-exoplayer.jar
 media3-exoplayer-hls.jar
-media3-ui.jar
 annotation.jar
 core.jar
+collection-jvm.jar
 lifecycle-common.jar
 lifecycle-runtime.jar
 versionedparcelable.jar
-loader.jar
 interpolator.jar
+kotlin-stdlib.jar
+kotlinx-coroutines-core-jvm.jar
 guava.jar
 failureaccess.jar
 listenablefuture.jar

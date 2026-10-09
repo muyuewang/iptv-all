@@ -285,6 +285,7 @@ function renderEpg(){
 /* ---------- 播放 ---------- */
 function openChannel(tid, id, name){
   cur.tid=tid; cur.id=id; cur.name=name; cur.urls=[]; cur.idx=0; cur.epg=[];
+  NATIVE.dead = false;          /* ★ 新频道：重新允许原生硬解 */
   $("cname").textContent=name;
   $("btnFav").className="btn"+(isFav(tid,id)?" act":"");
   $("btnFav").textContent=isFav(tid,id)?"★ 已收藏":"☆ 收藏";
@@ -416,6 +417,7 @@ var NATIVE = {
   ok: false,        /* 原生桥是否可用（开机探测一次） */
   active: false,    /* 当前是否正在走原生播放 */
   probing: false,
+  dead: false,      /* 本频道硬解已失败过：置 true 后本次播放会话不再试原生，直走软解 */
   lastUrl: "",
   timer: null,      /* 卡死看护定时器 */
   lastPos: 0,       /* 上一次读到的播放位置（判断是否零推进） */
@@ -438,17 +440,31 @@ window.__onNativeState = function(state, detail){
       $("status").style.display="block"; $("status").textContent="连接线路"+(cur.idx+1)+"…";
     } else if(state === "ready" || state === "size"){
       $("status").style.display="none";
+      NATIVE.retry = 0;                     /* 连上了就清零重连计数 */
       stallN = 0; stallT = Date.now();
     } else if(state === "decoder"){
       /* 原生回传命中的解码器名（hw:xxx / sw-only），仅日志用途 */
       try{ console.log("[native decoder]", detail); }catch(e){}
     } else if(state === "ended"){
-      nextLine();
+      /* 直播 FLV 的连接被 CDN 掐断时 ExoPlayer 会报 ended——这不是线路坏，
+         重连同一条线路即可（比烧掉一条线路划算得多）。
+         同一条线路连续重连 2 次仍断，才换下一条。 */
+      NATIVE.retry = (NATIVE.retry || 0) + 1;
+      if(NATIVE.retry <= 2 && NATIVE.active && NATIVE.lastUrl && NativeTV.nativeSwitch){
+        toast("直播流断开，自动重连…");
+        setTimeout(function(){
+          try{ if(NATIVE.active && NativeTV.nativeSwitch) NativeTV.nativeSwitch(NATIVE.lastUrl); }catch(e){}
+        }, 600);
+      } else {
+        NATIVE.retry = 0;
+        nextLine();
+      }
     } else if(state === "error"){
-      /* 原生播放报错 → 本次回落到软解重试一次，避免直接黑屏 */
+      /* 原生播放报错 → 本会话内放弃原生硬解，改用软解兜底，避免「硬解失败→切线→又硬解」死循环 */
       if(NATIVE.active && !NATIVE.probing){
         toast("硬解失败，切换软解");
         NATIVE.active = false;
+        NATIVE.dead = true;               /* ★ 关键：本频道本次播放不再尝试原生 */
         setTimeout(function(){ playSoft(cur.idx); }, 200);
       }
     }
@@ -557,9 +573,10 @@ function mpegtsCfg(){
 function playIdx(i){
   cur.idx=i; setLineUI();
   var url=cur.urls[i]; if(!url) return;
-  /* ★ v1.4：优先原生硬解。原生已在播 → 只换源（nativeSwitch）；否则尝试起播。
-     两条路都失败才回落 mpegts 软解。 */
-  if(NATIVE.ok){
+  /* ★ 优先原生硬解。原生已在播 → 只换源（nativeSwitch）；否则尝试起播。
+     两条路都失败才回落 mpegts 软解。
+     ★ NATIVE.dead：本频道硬解已失败过，直接软解，不再反复试原生。 */
+  if(NATIVE.ok && !NATIVE.dead){
     var ok = NATIVE.active ? nativeSwitch(url) : playNative(url);
     if(ok){
       /* 原生通道接管：把网页 <video> 彻底停掉，避免两路同时解码抢资源 */

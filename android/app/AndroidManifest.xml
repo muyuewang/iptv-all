@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.clean.tv"
-    android:versionCode="4"
-    android:versionName="1.3">
+    android:versionCode="6"
+    android:versionName="1.5">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -12,9 +12,13 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
-    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="34" />
+    <!-- minSdk 19 = Android 4.4：老 TV 盒子兼容。
+         4.4 走老 ExoPlayer2 硬解（API 16+），5.0+ 走 media3 硬解。
+         方法数超 65K，须 multidex（minSdk<21 时用 legacy multidex）。 -->
+    <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="34" />
 
     <application
+        android:name="androidx.multidex.MultiDexApplication"
         android:label="纯净电视"
         android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/tv_banner"

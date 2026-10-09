@@ -359,16 +359,31 @@ function playIdx(i){
   if(!window.mpegts || !mpegts.getFeatureList().mseLivePlayback){ $("status").textContent="当前浏览器不支持 FLV 直播"; return; }
   try{
     player=mpegts.createPlayer({type:"flv",isLive:true,url:url,cors:true}, mpegtsCfg());
-    v.onplaying=function(){ stall.n=0; stall.t=Date.now(); $("status").style.display="none"; };
-    v.onended=function(){ nextLine(); };
+    v.onplaying=function(){ stall.n=0; stall.t=Date.now(); retryN=0; $("status").style.display="none"; };
+    v.onended=function(){ handleEnded(); };
     v.onerror=function(){ nextLine(); };
     bindStallWatch(v);
-    player.on(mpegts.Events.ERROR, function(){ nextLine(); });
+    player.on(mpegts.Events.ERROR, function(){ handleEnded(); });
     player.attachMediaElement(v);
     player.load();
     var pr=v.play(); if(pr&&pr.catch) pr.catch(function(){});
   }catch(e){ nextLine(); }
 }
+
+/* ★ 直播 FLV 被 CDN 掐断时报 ended/error——这是线路断了不是坏了。
+   同一线路连续重连 2 次仍断才换下一条，避免频繁换线。 */
+var retryN = 0;
+function handleEnded(){
+  retryN++;
+  if(retryN <= 2){
+    toast("直播流断开，自动重连…");
+    setTimeout(function(){ playIdx(cur.idx); }, 600);
+  } else {
+    retryN = 0;
+    nextLine();
+  }
+}
+
 function nextLine(){
   if(cur.idx+1<cur.urls.length){ toast("线路"+(cur.idx+1)+"不通，自动切换"); playIdx(cur.idx+1); }
   else { $("status").style.display="block"; $("status").textContent="全部线路暂时不通，请返回重进刷新"; }
@@ -415,6 +430,10 @@ function init(){
       var d=document.createElement("div"); d.className="tab"; d.textContent=c.name; d.dataset.tid=c.tid;
       d.onclick=function(){ loadCat(c.tid); }; t.appendChild(d);
     });
+    /* ★ 检测到 mpv/ffplay/vlc 时，console 提示可升级硬解（不改默认软解行为） */
+    if(j.hw && Object.keys(j.hw).length){
+      try{ console.info("[CleanTV] 检测到本地硬解播放器，可升级原生硬解:", j.hw); }catch(e){}
+    }
     loadCat("tv");
   }).catch(function(){ $("list").innerHTML='<div id="hint">无法连接本地服务</div>'; });
 

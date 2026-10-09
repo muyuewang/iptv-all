@@ -1,0 +1,10 @@
+com/clean/tv/MainActivity.class
+com/clean/tv/MainActivity$NativeBridge.class
+com/clean/tv/NativePlayer.class
+com/clean/tv/NativeBackend.class
+com/clean/tv/NativeBackend$Listener.class
+androidx/multidex/MultiDex.class
+androidx/multidex/MultiDexApplication.class
+androidx/multidex/MultiDex$V19.class
+androidx/multidex/MultiDex$V4.class
+androidx/multidex/ZipUtil.class

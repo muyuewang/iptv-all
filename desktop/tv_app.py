@@ -150,7 +150,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if path == "/api/meta":
                 return self._json({"cats": [{"tid": t, "name": n} for t, n in CATS],
-                                   "version": VERSION, "os": sys.platform})
+                                   "version": VERSION, "os": sys.platform,
+                                   "hw": detect_hw_backends()})
             if path == "/api/list":
                 tid = params.get("tid", "tv")
                 with _lock:
@@ -194,6 +195,22 @@ def free_port(start=18899, tries=40):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def detect_hw_backends():
+    """探测系统是否有可用的原生硬解播放器（供前端显示升级提示）。
+
+    桌面端当前用浏览器 + mpegts.js 软解，CPU 强时够用；但若装了 mpv/ffplay，
+    可走「原生窗口嵌入」实现真正的 GPU 硬解。这里只探测，不自动切换。
+    """
+    found = {}
+    for name, hint in (("mpv", "libmpv / mpv 播放器"),
+                       ("ffplay", "ffmpeg 附带的 ffplay"),
+                       ("vlc", "VLC 播放器")):
+        p = shutil.which(name)
+        if p:
+            found[name] = p
+    return found
 
 
 def find_browser():

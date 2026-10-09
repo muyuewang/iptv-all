@@ -1,0 +1,14 @@
+exoplayer-core.jar
+exoplayer-hls.jar
+exoplayer-common.jar
+exoplayer-container.jar
+exoplayer-datasource.jar
+exoplayer-decoder.jar
+exoplayer-extractor.jar
+exoplayer-database.jar
+annotation.jar
+core.jar
+multidex.jar
+guava.jar
+failureaccess.jar
+listenablefuture.jar

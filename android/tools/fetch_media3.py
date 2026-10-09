@@ -44,16 +44,22 @@ DEPS = [
     ("androidx/media3", "media3-extractor",     V, True),   # ★ FLV 解封装在这里
     ("androidx/media3", "media3-exoplayer",     V, True),   # ★ 核心播放引擎
     ("androidx/media3", "media3-exoplayer-hls", V, True),   # 顺带支持 HLS（回看可能用）
-    ("androidx/media3", "media3-ui",            V, True),   # ★ PlayerView
+    # media3-ui 不引入：它需要 recyclerview（PlayerControlView 用），而我们用自己的
+    # SurfaceView 承载画面、网页画控制条，PlayerView 完全用不到。
     # ---- media3 的 androidx 传递依赖（手工列全，避免漏包）----
     ("androidx/annotation",     "annotation",        "1.8.1", False),   # annotation 只有 jar
     ("androidx/core",           "core",              "1.12.0", True),
-    ("androidx/collection",     "collection",        "1.4.0", True),
+    # collection 1.4.0 起改为 Kotlin 多平台元数据包（无 .class），JVM 类在 collection-jvm
+    ("androidx/collection",     "collection-jvm",    "1.4.0", False),   # CircularArray/CircularIntArray（异步解码队列用）
     ("androidx/lifecycle",      "lifecycle-common",  "2.6.2", False),
     ("androidx/lifecycle",      "lifecycle-runtime", "2.6.2", True),
     ("androidx/versionedparcelable", "versionedparcelable", "1.1.1", True),
-    ("androidx/loader",         "loader",            "1.1.0", True),
     ("androidx/interpolator",   "interpolator",      "1.0.0", True),
+    # loader 不引入：它牵出 lifecycle-viewmodel/livedata 一串依赖，media3 核心用不到。
+    # ---- Kotlin 运行时（collection-jvm / lifecycle-runtime 2.6+ 是 Kotlin 编译的，
+    #      d8 脱糖与运行期都要这些类；缺了会 NoClassDefFoundError）----
+    ("org/jetbrains/kotlin",    "kotlin-stdlib",             "1.8.22", False),
+    ("org/jetbrains/kotlinx",   "kotlinx-coroutines-core-jvm", "1.7.3", False),
     # ---- guava（media3-exoplayer 内部用 com.google.common.collect.ImmutableList，
     #      media3 用 android flavor，跟它的 -android 变体对齐）----
     ("com/google/guava",        "guava",             "33.3.1-android", False),
@@ -104,15 +110,16 @@ def main():
         else:
             data = fetch(base + "/" + fname)
             if data is None:
-                continue
+                # 缺依赖比静默跳过危险得多（运行期 NoClassDefFoundError），直接报错退出
+                print("    !! 致命：依赖 %s 下载失败，终止" % art)
+                sys.exit(1)
             open(cache, 'wb').write(data)
 
-        dest = os.path.join(CLS_DIR, art)
-        if os.path.isdir(dest):
-            shutil.rmtree(dest)
-        names = unzip_into(data, dest)
-
         if is_aar:
+            dest = os.path.join(CLS_DIR, art)
+            if os.path.isdir(dest):
+                shutil.rmtree(dest)
+            names = unzip_into(data, dest)
             cj = os.path.join(dest, "classes.jar")
             if os.path.isfile(cj):
                 dst = os.path.join(LIB_DIR, art + ".jar")
@@ -122,13 +129,10 @@ def main():
             else:
                 print("      !! aar 内无 classes.jar: %s" % names)
         else:
+            # 纯 jar 依赖：不解包（kotlin-stdlib 等内含超长类名会超 Windows MAX_PATH），
+            # 直接把下载的 jar 复制进 libs/
             dst = os.path.join(LIB_DIR, art + ".jar")
-            # 纯 jar 依赖：解包目录里可能有多余层级，直接找同名文件
-            src = os.path.join(dest, fname)
-            if not os.path.isfile(src):
-                # 有些 jar 解包后名字不同，回退到刚下载的原始文件
-                src = cache
-            shutil.copyfile(src, dst)
+            shutil.copyfile(cache, dst)
             jars.append(dst)
             print("      -> jar (%d KB)" % (os.path.getsize(dst)//1024))
 

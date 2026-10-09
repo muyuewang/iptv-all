@@ -75,19 +75,18 @@ public class MainActivity extends Activity {
            返回 true 表示「已接管」，网页就不要再用 mpegts.js 软解。
            网页侧调用约定见 player.html 的 NatPlay 封装。 */
 
-        /** 是否有可用的原生播放器（ExoPlayer 已编入且未异常） */
+        /** 是否有可用的原生播放器（按系统版本已挑好硬解后端） */
         @JavascriptInterface
         public boolean hasNativePlay() {
-            return nplayer != null;
+            return nplayer != null && nplayer.available();
         }
 
         /** 开始播放（url 为解密后的 FLV/HLS 直链） */
         @JavascriptInterface
         public void nativePlay(final String url) {
-            if (nplayer == null) return;
+            if (nplayer == null || !nplayer.available()) return;
             runOnUiThread(new Runnable() {
                 @Override public void run() {
-                    nplayer.attach(0);
                     nplayer.play(url);
                 }
             });
@@ -118,7 +117,8 @@ public class MainActivity extends Activity {
         /** 取播放统计（JSON 字符串），网页用来做卡顿判定 */
         @JavascriptInterface
         public String nativeStats() {
-            return nplayer == null ? "{}" : nplayer.stats();
+            if (nplayer == null) return "{}";
+            return nplayer.stats();
         }
 
         /** 是否命中硬件解码 */
@@ -128,8 +128,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    // 关键：服务器靠该 UA 才返回新版播放器页
-    private static final String APP_UA =
+    // 关键：服务器靠该 UA 才返回新版播放器页（后端播放器复用同一 UA）
+    static final String APP_UA =
         "Mozilla/5.0 (Linux; Android 9; SM-N9700 Build/PQ3B.190801.01311438; wv) " +
         "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 " +
         "Mobile Safari/537.36 diashizhb LT-APP/48/517/YM-RT/";
@@ -166,8 +166,9 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 21) {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
-        // ★ 解码/渲染优化：让 WebView 用 GPU 合成 + 硬件解码视频
-        try { web.setLayerType(View.LAYER_TYPE_HARDWARE, null); } catch (Throwable t) {}
+        // ★ 解码/渲染优化：WebView 默认就是硬件加速渲染。
+        //   注意不要 setLayerType(LAYER_TYPE_HARDWARE)——离屏层会破坏透明度，
+        //   导致底层 SurfaceView 的视频画面透不出来（黑屏）。
         try { s.setRenderPriority(WebSettings.RenderPriority.HIGH); } catch (Throwable t) {}
         if (Build.VERSION.SDK_INT >= 26) {
             try { web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false); } catch (Throwable t) {}
