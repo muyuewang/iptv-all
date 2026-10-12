@@ -72,6 +72,16 @@
   var t0 = Date.now();
   var swept = 0;
   var stuck = 0;
+  /* ★ v2.10.13g 起播后保活复核：onPlaying 只是「瞬时已播 >0.2s」的一次性判定，
+     native 随即 fadeInPage 把官方页拉到全亮。若视频之后停住（缓冲失败 / 直播流
+     断掉 / 站点给的是大播放按钮海报帧），entered=true 后没有任何判死机制 ——
+     用户就会看到官方页原始界面全亮透出且永不换线（v2.10.13 用户实测截图）。
+     复核判据：时间轴连续 10s 不推进（含 paused/ended）即报 pageFailed 换线；
+     native pageFailedSent 在 pagePlaying 时已重置，起播后再报依然有效。 */
+  var STALL_MS = 10000;
+  var lastCT = -1;
+  var lastMoveT = 0;
+  var stallReported = false;
   /* 被收掉的站点浮层的文本存档（错误检测用，见 sweepOverlays） */
   var sweptTexts = [];
   /* ★ 只允许存在一条轮询链。
@@ -441,9 +451,11 @@
 
   function onPlaying() {
     fill();
-    if (entered) return;
+    if (entered || stallReported) return;   // 报死后不再反复进入（换线由 pageFailed 驱动）
     if (!video || video.currentTime <= 0.2) return;      // 没真的出画面，不算
     entered = true;
+    lastCT = video.currentTime;                          // 保活复核基线
+    lastMoveT = Date.now();
     log("playing -> notify native（已播 " + video.currentTime.toFixed(1) + "s）");
     call("pagePlaying");
   }
@@ -599,6 +611,7 @@
     } else if (!document.documentElement.contains(video)) {
       log("video 已从 DOM 移除，重新找");
       video = null; entered = false;
+      lastCT = -1; lastMoveT = Date.now();   // 新 video 重新做保活基线，防拿旧基线误判
     }
     if (video) {
       fill();
@@ -617,6 +630,20 @@
          「刚找到 video、站点还没挂源」的正常加载过程算进来。 */
       var dead = !video.paused && video.currentTime <= 0.2 && !!video.currentSrc;
       stuck = dead ? stuck + 1 : 0;
+      /* ★ v2.10.13g 起播后保活复核：时间轴 10s 不推进（paused/ended/缓冲死）
+         → 报 pageFailed 让原生换下一条线路。正常直播 currentTime 每秒都在涨，
+         网络抖动 10s 宽限足够；画面真停了不能让官方页原始界面全亮挂在那。 */
+      if (entered && !stallReported) {
+        var ct = video.currentTime;
+        if (ct > lastCT + 0.01) { lastCT = ct; lastMoveT = Date.now(); }
+        if (Date.now() - lastMoveT > STALL_MS) {
+          stallReported = true;
+          entered = false;               // 回到未起播态：pageFailed 网页侧会换线
+          log("起播后画面停住（时间轴 " +
+              ((Date.now() - lastMoveT) / 1000).toFixed(1) + "s 未推进），请求换线");
+          call("pageFailed", "画面停住了，正在换下一条线路");
+        }
+      }
     }
     /* ★ 站点自己说「播不了」（VIP 专享弹窗 / 播出安排变更提示…）——
        立刻带原因报失败，别让用户黑屏干等 20s 超时。
@@ -657,6 +684,9 @@
     tries = 0;
     t0 = Date.now();
     stuck = 0;
+    lastCT = -1;              // v2.10.13g 保活复核基线一并重置
+    lastMoveT = Date.now();
+    stallReported = false;
     video = null;
     schedule(600);
   };
