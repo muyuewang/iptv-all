@@ -54,7 +54,11 @@
      相关 DOM、JS 与样式全部移除；换台走 #chOv 浮层，源切换走浮层顶部 .sopt。 */
 
   /* 官网源网页线路：整屏交给原生 WebView 加载官方页面 */
-  #webmask{display:none;position:fixed;inset:0;z-index:400;background:#000;
+  /* ★ v2.10.14：全屏层一律用 left/top/right/bottom 显式定位 —— `inset:0` 简写
+     要 Chromium 87+ 才支持，真机 TV 的老 WebView 不认，#status/#webmask/#player/
+     .ov 全部塌缩成内容大小挤在左上角（真机实测：加载页缩在角上、浮层开了
+     也「看不见」）。模拟器 WebView 新（87+）看不出来，别回退。 */
+  #webmask{display:none;position:fixed;left:0;top:0;right:0;bottom:0;z-index:400;background:#000;
            color:var(--fg-dim);align-items:center;justify-content:center;
            flex-direction:column;gap:14px;font-size:15px;}
   #webmask.show{display:flex;}
@@ -68,21 +72,21 @@
     outline:2.5px solid var(--gold);outline-offset:2px;background:var(--surface-2);}
 
   /* ---------------- 播放层 ---------------- */
-  #player{position:fixed;inset:0;background:#000;z-index:50;display:none;flex-direction:column;
+  #player{position:fixed;left:0;top:0;right:0;bottom:0;background:#000;z-index:50;display:none;flex-direction:column;
     /* ★ 关键：播放层整体接收触摸，手势/点按绑定在它上面，而不是 #vwrap。
        原生硬解模式下 #vwrap 是 visibility:hidden，点按落在 #vwrap 上会失效。 */
     touch-action:manipulation;}
   #player.show{display:flex;}
   #vwrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;flex:0 0 auto;overflow:hidden;
     transition:aspect-ratio .18s var(--ease);}
-  #vwrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+  #vwrap::after{content:"";position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;
     box-shadow:inset 0 0 60px rgba(0,0,0,.6);}
   video{width:100%;height:100%;background:#000;display:block;object-fit:contain;}
   /* ★ v2.10.8 状态页（参考 WebViewTV 的「黑底信息渐进」美学）：
      不再是状态文字条，而是整屏黑底频道页 —— 大号频道号 + 频道名 + 渐进状态行 +
      底部品牌字。视频首帧出来后整层 0.45s 淡出，视觉主线「黑底不动、文字更新、
      画面淡入」，消灭「转圈→播放图标→视频」的状态跳变。 */
-  #status{position:fixed;inset:0;z-index:600;display:flex;flex-direction:column;
+  #status{position:fixed;left:0;top:0;right:0;bottom:0;z-index:600;display:flex;flex-direction:column;
     align-items:center;justify-content:center;gap:16px;background:#000;opacity:1;
     transition:opacity .45s var(--ease);pointer-events:none;}
   #status.hide{opacity:0;}
@@ -100,7 +104,7 @@
 
   /* ================= 手机全屏模式（点「全屏」后） =================
      视频铺满 100% 屏高，控制条分上下两栏（电视家风格）：顶部返回+标题，底部功能钮。 */
-  #player.fs #vwrap{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;flex:none;}
+  #player.fs #vwrap{position:absolute;left:0;top:0;right:0;bottom:0;width:100%;height:100%;aspect-ratio:auto;flex:none;}
   #player.fs #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;z-index:2;border-top:none;
     background:transparent;pointer-events:none;}
   #player.fs #ctrl.hide .ctlbar{opacity:0;pointer-events:none;}
@@ -216,7 +220,7 @@
   body.tv{font-size:18px;}
   body.tv #player{display:none;}
   body.tv #player.show{display:block;}
-  body.tv #vwrap{position:absolute;inset:0;height:100%;aspect-ratio:auto;}
+  body.tv #vwrap{position:absolute;left:0;top:0;right:0;bottom:0;height:100%;aspect-ratio:auto;}
   body.tv #status .chno{font-size:120px;}
   body.tv #status .chname{font-size:36px;}
   body.tv #status .sub{font-size:19px;}
@@ -257,7 +261,7 @@
   #toasts{position:fixed;left:0;right:0;bottom:112px;z-index:800;display:flex;flex-direction:column;
     align-items:center;gap:8px;pointer-events:none;padding:0 16px;}
   body.tv #toasts{bottom:auto;top:32px;}
-  .tst{display:flex;align-items:center;gap:9px;max-width:min(520px,92%);
+  .tst{display:flex;align-items:center;gap:9px;max-width:92%;max-width:min(520px,92%);
     background:rgba(24,26,33,.95);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
     color:#fff;padding:10px 16px;border-radius:14px;font-size:13px;font-weight:500;
     border:1px solid var(--line-strong);box-shadow:var(--shadow-lg);
@@ -275,7 +279,7 @@
   body.tv .tst{font-size:18px;padding:14px 24px;border-radius:18px;}
 
   /* 播放失败占位卡（替代一行冷文字）：图标 + 原因 + 可操作按钮 */
-  #errCard{position:fixed;left:50%;top:50%;z-index:750;width:min(360px,86%);
+  #errCard{position:fixed;left:50%;top:50%;z-index:750;width:86%;width:min(360px,86%);
     transform:translate(-50%,-50%);background:rgba(18,20,26,.96);
     -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
     border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:22px 20px 18px;
@@ -299,7 +303,7 @@
   #errCard .eb .p{background:var(--brand-grad);color:#fff;}
   #errCard .eb .s{background:var(--surface-2);color:var(--fg);border:1px solid var(--line-strong);}
   #errCard .rt{margin-top:12px;font-size:11.5px;color:var(--fg-mute);}
-  body.tv #errCard{width:min(620px,80%);padding:34px 32px 28px;border-radius:var(--r-xl);}
+  body.tv #errCard{width:80%;width:min(620px,80%);padding:34px 32px 28px;border-radius:var(--r-xl);}
   body.tv #errCard .eic{font-size:46px;}
   body.tv #errCard .et{font-size:24px;}
   body.tv #errCard .ed{font-size:17px;}
@@ -313,23 +317,23 @@
   /* ★ v2.10.13：浮层 z-index 6→700 —— 必须盖过 #status(600)：加载中状态页显示时
      单击唤出浮层，原来被压在状态页下面完全看不见（用户实测「点击没反应」，
      要等起播 hideStatus 才露出来）。toast 800 / errCard 750 保持在其上。 */
-  .ov{position:fixed;inset:0;z-index:700;display:none;background:rgba(0,0,0,.42);
+  .ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:700;display:none;background:rgba(0,0,0,.42);
     animation:layerIn .2s var(--ease);}
   /* ★ v2.10.8：面板侧加深 + 视频侧渐透 —— 参考 WebViewTV 设置面板的「半屏暗渐变」：
      列表所在一侧文字清晰可读，另一侧尽量透出画面。 */
-  .ov{position:fixed;inset:0;z-index:700;display:none;background:rgba(0,0,0,.42);
+  .ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:700;display:none;background:rgba(0,0,0,.42);
     animation:layerIn .2s var(--ease);}
   /* ★ v2.10.8：频道列表改「左侧挂板」——列表收进左边一块面板（手机 62% 宽 / TV 52%），
      右侧大半屏完全透出视频；点视频区任意空白即关闭（比全屏浮层的「空白」大得多）。
      参考 WebViewTV 设置面板的停靠式布局。 */
   #chOv{background:transparent;}
-  #chOv > #chOvSrc{width:min(440px,64%);
+  #chOv > #chOvSrc{width:64%;width:min(440px,64%);
     background:linear-gradient(180deg,rgba(9,10,16,.94),rgba(9,10,16,.88));}
-  #chOv > .ovbody{width:min(440px,64%);
+  #chOv > .ovbody{width:64%;width:min(440px,64%);
     background:linear-gradient(180deg,rgba(9,10,16,.88),rgba(9,10,16,.94));
     border-right:1px solid rgba(255,255,255,.09);
     box-shadow:8px 0 40px rgba(0,0,0,.45);}
-  .ov{position:fixed;inset:0;z-index:700;display:none;background:rgba(0,0,0,.42);
+  .ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:700;display:none;background:rgba(0,0,0,.42);
     animation:layerIn .2s var(--ease);}
   .ov.show{display:flex;}
   /* 底色变浅后给文字加投影保可读（视频亮画面直接衬在文字底下） */
@@ -369,13 +373,13 @@
   #chOv .chi.on{color:var(--gold);font-weight:700;background:rgba(255,197,49,.14);
     border-color:rgba(255,197,49,.35);}
   body.tv #chOv > #chOvSrc,
-  body.tv #chOv > .ovbody{width:min(620px,54%);}
+  body.tv #chOv > .ovbody{width:54%;width:min(620px,54%);}
   body.tv #chOv .cats{flex:0 0 230px;}
   body.tv #chOv .cat{font-size:19px;padding:16px 22px;}
   body.tv #chOv .chi{font-size:19px;padding:14px 16px;}
   /* 设置：右侧半透明面板 */
   #setOv{justify-content:flex-end;}
-  #setOv .panel{width:min(330px,82%);height:100%;background:rgba(10,11,15,.8);
+  #setOv .panel{width:82%;width:min(330px,82%);height:100%;background:rgba(10,11,15,.8);
     border-left:1px solid rgba(255,255,255,.1);padding:20px 18px;overflow:auto;
     display:flex;flex-direction:column;gap:20px;scrollbar-width:none;}
   #setOv .panel::-webkit-scrollbar{display:none;}
@@ -391,7 +395,7 @@
   #setOv .foot .clk{font-variant-numeric:tabular-nums;}
   #setOv .foot .net{color:#3ddc84;font-variant-numeric:tabular-nums;}
   #setOv .foot .res{font-variant-numeric:tabular-nums;}
-  body.tv #setOv .panel{width:min(480px,70%);}
+  body.tv #setOv .panel{width:70%;width:min(480px,70%);}
   body.tv #setOv .opt{font-size:18px;padding:13px 24px;}
   body.tv #setOv .sec .t{font-size:16px;}
   body.tv #setOv .foot{font-size:17px;}
