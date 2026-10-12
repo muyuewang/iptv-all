@@ -1,0 +1,2522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>纯净电视直播</title>
+<!-- 共享核心：频道/解密/EPG/台标/收藏，与桌面端 shared/core.py 逻辑对齐 -->
+<script src="logos.js"></script>
+<script src="mpegts.js"></script>
+<script src="tv_core.js"></script>
+<!-- 官网源（WebViewTV）：内置快照 + AES-256-CBC 解密 + 镜像回退，见 shared/wvt.py -->
+<script src="wvt_channels.js"></script>
+<script src="wvt.js"></script>
+<style>
+  /* ==========================================================================
+     设计令牌 —— 现代深色媒体应用语言
+     层次：bg(最底) < surface(卡) < surface2(悬浮) ；品牌色为红→暖橙渐变
+     ========================================================================*/
+  :root{
+    --bg:#0a0b0f;
+    --bg-grad:radial-gradient(120% 80% at 50% -10%, #1b1220 0%, #0a0b0f 58%);
+    --surface:rgba(255,255,255,.045);
+    --surface-2:rgba(255,255,255,.085);
+    --surface-solid:#16181f;
+    --line:rgba(255,255,255,.075);
+    --line-strong:rgba(255,255,255,.14);
+    --fg:#f2f4f8;
+    --fg-dim:#a2a9b8;
+    --fg-mute:#6b7385;
+    --brand:#ff2d55;
+    --brand-2:#ff6b35;
+    --brand-grad:linear-gradient(135deg,#ff2d55 0%,#ff6b35 100%);
+    --gold:#ffc531;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+    --shadow-md:0 6px 20px -6px rgba(0,0,0,.55);
+    --shadow-lg:0 18px 48px -12px rgba(0,0,0,.7);
+    --glow:0 0 0 1px rgba(255,45,85,.4), 0 6px 22px -4px rgba(255,45,85,.45);
+    --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:22px;
+    --ease:cubic-bezier(.32,.72,0,1);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  /* 页面骨架：header 自适应高度，列表区 flex 吃满剩余空间
+     —— 顶栏里加减内容都不用再去改 #scroller 的魔法数字 */
+  body{display:flex;flex-direction:column;}
+  html,body{margin:0;height:100%;background:var(--bg);background-image:var(--bg-grad);
+    background-attachment:fixed;color:var(--fg);overflow:hidden;letter-spacing:.01em;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+
+  /* v2.10.7：旧列表页（顶栏/搜索/源切换条/分类/频道网格）已整体退役，
+     相关 DOM、JS 与样式全部移除；换台走 #chOv 浮层，源切换走浮层顶部 .sopt。 */
+
+  /* 官网源网页线路：整屏交给原生 WebView 加载官方页面 */
+  #webmask{display:none;position:fixed;inset:0;z-index:400;background:#000;
+           color:var(--fg-dim);align-items:center;justify-content:center;
+           flex-direction:column;gap:14px;font-size:15px;}
+  #webmask.show{display:flex;}
+  #webmask .sp{width:34px;height:34px;border-radius:50%;border:3px solid var(--line-strong);
+               border-top-color:var(--brand);animation:spin .9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  /* 焦点环（TV/键盘） */
+  .ctlbtn:focus,.line-item:focus{outline:none;}
+  .ctlbtn:focus-visible,.line-item:focus-visible{
+    outline:2.5px solid var(--gold);outline-offset:2px;background:var(--surface-2);}
+
+  /* ---------------- 播放层 ---------------- */
+  #player{position:fixed;inset:0;background:#000;z-index:50;display:none;flex-direction:column;
+    /* ★ 关键：播放层整体接收触摸，手势/点按绑定在它上面，而不是 #vwrap。
+       原生硬解模式下 #vwrap 是 visibility:hidden，点按落在 #vwrap 上会失效。 */
+    touch-action:manipulation;}
+  #player.show{display:flex;}
+  #vwrap{position:relative;width:100%;aspect-ratio:16/9;background:#000;flex:0 0 auto;overflow:hidden;
+    transition:aspect-ratio .18s var(--ease);}
+  #vwrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+    box-shadow:inset 0 0 60px rgba(0,0,0,.6);}
+  video{width:100%;height:100%;background:#000;display:block;object-fit:contain;}
+  #status{margin:auto;color:#e6e9f0;font-size:14px;font-weight:500;text-align:center;padding:0 30px;
+    position:absolute;left:0;right:0;top:42%;text-shadow:0 2px 12px rgba(0,0,0,.8);pointer-events:none;}
+  /* 连接中的小转圈：让「正在连线路」看起来是在动，而不是卡住 */
+  #status .sp{display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:-1px;
+    border:2px solid rgba(255,255,255,.22);border-top-color:var(--brand);border-radius:50%;
+    animation:spin .9s linear infinite;}
+
+  /* ================= 手机全屏模式（点「全屏」后） =================
+     视频铺满 100% 屏高，控制条分上下两栏（电视家风格）：顶部返回+标题，底部功能钮。 */
+  #player.fs #vwrap{position:absolute;inset:0;width:100%;height:100%;aspect-ratio:auto;flex:none;}
+  #player.fs #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;z-index:2;border-top:none;
+    background:transparent;pointer-events:none;}
+  #player.fs #ctrl.hide .ctlbar{opacity:0;pointer-events:none;}
+  #player.fs #epg{max-height:44vh;}
+
+  /* 控制条容器：上下两条半透明渐变栏，中间区域透明可穿透（点画面用） */
+  #ctrl{display:block;transition:opacity .3s var(--ease);}
+  .ctlbar{pointer-events:auto;transition:opacity .28s var(--ease),transform .28s var(--ease);}
+  /* 顶部栏：返回 + 频道名 + 收藏 */
+  #topbar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;
+    padding:14px 16px 30px;z-index:3;
+    background:linear-gradient(180deg,rgba(8,9,13,.9) 0%,rgba(8,9,13,.5) 60%,transparent 100%);}
+  #topbar .cname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;
+    font-size:15px;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.8);}
+  /* 底部栏：进度提示 + 节目单/线路/播放/比例/全屏/返回 */
+  #botbar{position:absolute;bottom:0;left:0;right:0;z-index:3;
+    background:linear-gradient(0deg,rgba(8,9,13,.92) 0%,rgba(8,9,13,.55) 60%,transparent 100%);
+    padding:30px 16px 16px;}
+  #botbar .row1{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
+  #botbar .live-tag{flex:0 0 auto;font-size:10px;font-weight:700;color:#fff;background:var(--brand-grad);
+    border-radius:4px;padding:2px 7px;letter-spacing:.03em;}
+  #botbar .prog{flex:1;color:var(--fg-dim);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;}
+  #botbar .clock{flex:0 0 auto;color:var(--fg-mute);font-size:12px;font-variant-numeric:tabular-nums;}
+  /* 播放信息角标（v2.8）：分辨率 / 帧率 / 码率 / 缓冲。默认「简」，点击循环 关→简→详。
+     关闭态留一个很淡的 ⓘ 作为入口，否则关掉之后就再也点不开了。 */
+  #botbar .statbadge{flex:0 0 auto;color:var(--fg-mute);font-size:11.5px;font-weight:600;
+    font-variant-numeric:tabular-nums;letter-spacing:.01em;white-space:nowrap;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);cursor:pointer;
+    transition:background .18s var(--ease),color .18s var(--ease),opacity .18s var(--ease);}
+  #botbar .statbadge.off{opacity:.4;padding:2px 6px;border-color:transparent;}
+  #botbar .statbadge.warn{color:var(--gold);border-color:rgba(255,197,49,.32);}
+  #botbar .statbadge:active{background:rgba(255,255,255,.1);}
+  body.tv #botbar .statbadge{font-size:15px;padding:4px 12px;}
+  #botbar .row2{display:flex;align-items:center;gap:8px;}
+  .ctlbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 4px;
+    border-radius:var(--r-sm);color:var(--fg);background:transparent;border:none;cursor:pointer;
+    font-size:11px;transition:background .18s var(--ease),transform .18s var(--ease);}
+  .ctlbtn:active{background:rgba(255,255,255,.1);transform:scale(.94);}
+  .ctlbtn .ic{font-size:20px;line-height:1;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5));}
+  .ctlbtn.act .ic{color:var(--brand);}
+  .ctlbtn.act .lb{color:var(--brand);font-weight:600;}
+
+  /* ================= 原生硬解模式（v1.4） =================
+     画面由原生 TextureView 输出（挂在 WebView 之下，全屏铺满）。
+     此时网页这一层要整体透明化：html/body 透明、频道列表隐藏、<video> 隐藏，
+     只保留控制条浮层可见可点 —— 否则会盖住原生画面。
+     依赖 MainActivity 侧 WebView.setBackgroundColor(TRANSPARENT)。
+
+     ★ frame-on（v2.5.1 拆分）：退出播放层时原生会抓下最后一帧钉在屏幕下方
+     （FrozenFrame），开台时要把 WebView 转透明让那一帧透出来。这一步要的
+     只是「透明 + 藏列表」，**不能**连 <video> 一起隐藏 —— 因为有些频道最后
+     会走软解，那时画面就在网页的 <video> 里。所以拆成两个类：
+       frame-on  = 透明 + 藏列表/顶栏（保帧透出、软解 <video> 也能用）
+       native-on = frame-on 的效果 + 彻底隐藏网页播放器（原生硬解才用） */
+  html.frame-on, body.frame-on,
+  html.native-on, body.native-on{background:transparent;background-image:none;}
+  body.frame-on #player, body.native-on #player{background:transparent;}
+  body.frame-on #vwrap, body.native-on #vwrap{background:transparent;}
+  /* <video> 默认自带 #000 底 —— 保帧模式下必须也透明，否则它会盖住下面的帧 */
+  body.frame-on #vwrap video, body.native-on #vwrap video{background:transparent;}
+  body.frame-on #status, body.native-on #status{color:#e6e9f0;}
+  body.native-on #vwrap{visibility:hidden;}
+
+  /* 线路选择弹层（电视家风格：底部滑出面板） */
+  #linePanel{position:absolute;left:0;right:0;bottom:0;z-index:4;
+    background:rgba(12,13,18,.96);-webkit-backdrop-filter:blur(20px) saturate(160%);
+    backdrop-filter:blur(20px) saturate(160%);border-top:1px solid var(--line-strong);
+    border-radius:16px 16px 0 0;padding:14px 16px 18px;display:none;
+    transform:translateY(100%);transition:transform .28s var(--ease);}
+  #linePanel.show{display:block;transform:translateY(0);}
+  #linePanel .ttl{font-size:13px;font-weight:600;color:var(--fg-dim);margin:0 0 12px 4px;}
+  #linePanel .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  #linePanel .line-item{display:flex;flex-direction:column;align-items:center;gap:7px;padding:12px 4px;
+    border-radius:var(--r-md);background:var(--surface);border:1px solid var(--line);cursor:pointer;
+    transition:all .18s var(--ease);}
+  #linePanel .line-item .ic{font-size:22px;}
+  #linePanel .line-item .lb{font-size:12px;color:var(--fg-dim);font-weight:500;}
+  #linePanel .line-item.on{background:var(--brand-grad);border-color:transparent;}
+  #linePanel .line-item.on .lb{color:#fff;font-weight:600;}
+
+  /* EPG 节目单（电视家风格：右侧滑出或底部弹出，此处底部弹出） */
+  #epg{display:none;overflow:auto;max-height:46vh;position:absolute;left:0;right:0;bottom:0;
+    z-index:4;background:rgba(12,13,18,.96);-webkit-backdrop-filter:blur(20px) saturate(160%);
+    backdrop-filter:blur(20px) saturate(160%);border-top:1px solid var(--line-strong);
+    border-radius:16px 16px 0 0;padding:6px 0 12px;}
+  #epg.show{display:block;}
+  #epg .row{display:flex;gap:12px;padding:11px 20px;border-bottom:1px solid rgba(255,255,255,.045);
+    font-size:13px;transition:background .2s var(--ease);}
+  #epg .row.now{background:linear-gradient(90deg,rgba(255,45,85,.16),rgba(255,45,85,.03));
+    color:#fff;box-shadow:inset 3px 0 0 var(--brand);}
+  #epg .row .tm{color:var(--fg-mute);flex:0 0 48px;font-variant-numeric:tabular-nums;font-weight:500;}
+  #epg .row.now .tm{color:var(--gold);font-weight:600;}
+  #epg .row .pg{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #epg .row .rb{color:#fff;font-size:10.5px;font-weight:700;background:var(--brand-grad);
+    border-radius:999px;padding:2px 8px;letter-spacing:.03em;align-self:center;}
+
+  /* 亮度/音量手势指示条 */
+  #gestureInd{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%) scale(.9);
+    z-index:5;display:none;flex-direction:column;align-items:center;gap:8px;
+    background:rgba(0,0,0,.72);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    padding:16px 22px;border-radius:14px;pointer-events:none;}
+  #gestureInd.show{display:flex;}
+  #gestureInd .ic{font-size:30px;}
+  #gestureInd .val{color:#fff;font-size:13px;font-weight:600;min-width:48px;text-align:center;}
+  #gestureInd .bar{width:120px;height:4px;background:rgba(255,255,255,.2);border-radius:2px;overflow:hidden;}
+  #gestureInd .bar i{display:block;height:100%;background:var(--brand-grad);width:50%;border-radius:2px;}
+
+  /* Toast 样式见文件末尾「v2.5 · 过渡动效 / 状态反馈」一节（已升级为可堆叠的分类组件） */
+
+  /* ================= TV（大屏 10-foot）模式 ================= */
+  body.tv{font-size:18px;}
+  body.tv #player{display:none;}
+  body.tv #player.show{display:block;}
+  body.tv #vwrap{position:absolute;inset:0;height:100%;aspect-ratio:auto;}
+  body.tv #status{top:44%;font-size:22px;}
+  body.tv #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;border-top:none;
+    background:transparent;pointer-events:none;}
+  body.tv #ctrl.hide .ctlbar{opacity:0;pointer-events:none;}
+  body.tv .ctlbar{pointer-events:auto;}
+  body.tv #topbar{padding:20px 40px 40px;}
+  body.tv #topbar .cname{font-size:24px;}
+  body.tv .ctlbtn{font-size:15px;padding:12px 8px;}
+  body.tv .ctlbtn .ic{font-size:28px;}
+  body.tv #botbar{padding:40px 40px 24px;}
+  body.tv #botbar .prog{font-size:17px;}
+  body.tv #botbar .clock{font-size:16px;}
+  body.tv #linePanel .grid{grid-template-columns:repeat(6,1fr);gap:14px;}
+  body.tv #linePanel .line-item .ic{font-size:28px;}
+  body.tv #linePanel .line-item .lb{font-size:15px;}
+  body.tv #linePanel .ttl{font-size:17px;}
+  body.tv #epg{max-height:48vh;font-size:20px;background:rgba(6,7,10,.82);}
+  body.tv #epg .row{padding:16px 40px;}
+  body.tv #epg .row .tm{flex:0 0 76px;}
+  body.tv .ctlbtn:focus{box-shadow:var(--glow);}
+  body.tv #linePanel .line-item:focus{box-shadow:var(--glow);}
+
+  /* ==========================================================================
+     v2.5 · 过渡动效 / 状态反馈
+     原则：时长 ≤300ms、只动 transform 与 opacity（不触发布局重排，低端机不掉帧）
+     ========================================================================*/
+  /* 播放层进出场（进场用 keyframes：不依赖额外的类，绝无「忘了加类导致不可见」的风险） */
+  @keyframes layerIn{from{opacity:0;transform:scale(.985);}to{opacity:1;transform:none;}}
+  #player.show{animation:layerIn .22s var(--ease);}
+  #player.closing{opacity:0;transform:scale(.99);pointer-events:none;
+    transition:opacity .16s var(--ease),transform .16s var(--ease);}
+  /* 官方页遮罩淡入（转圈动画已有） */
+  #webmask.show{animation:layerIn .18s var(--ease);}
+
+  /* Toast 堆叠容器（替代单条 #toast） */
+  #toasts{position:fixed;left:0;right:0;bottom:112px;z-index:99;display:flex;flex-direction:column;
+    align-items:center;gap:8px;pointer-events:none;padding:0 16px;}
+  body.tv #toasts{bottom:auto;top:32px;}
+  .tst{display:flex;align-items:center;gap:9px;max-width:min(520px,92%);
+    background:rgba(24,26,33,.95);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+    color:#fff;padding:10px 16px;border-radius:14px;font-size:13px;font-weight:500;
+    border:1px solid var(--line-strong);box-shadow:var(--shadow-lg);
+    opacity:0;transform:translateY(10px);
+    transition:opacity .22s var(--ease),transform .22s var(--ease);}
+  .tst.in{opacity:1;transform:none;}
+  .tst.out{opacity:0;transform:translateY(-6px);}
+  .tst .ic{font-size:15px;line-height:1;flex:0 0 auto;}
+  .tst .tx{flex:1;min-width:0;line-height:1.45;}
+  .tst .act{flex:0 0 auto;pointer-events:auto;border:none;background:var(--brand-grad);color:#fff;
+    font-size:12px;font-weight:600;padding:5px 12px;border-radius:999px;cursor:pointer;}
+  .tst.ok{border-color:rgba(61,220,132,.5);}
+  .tst.warn{border-color:rgba(255,197,49,.5);}
+  .tst.err{border-color:rgba(255,45,85,.55);}
+  body.tv .tst{font-size:18px;padding:14px 24px;border-radius:18px;}
+
+  /* 播放失败占位卡（替代一行冷文字）：图标 + 原因 + 可操作按钮 */
+  #errCard{position:absolute;left:50%;top:50%;z-index:8;width:min(360px,86%);
+    transform:translate(-50%,-50%);background:rgba(18,20,26,.96);
+    -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
+    border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:22px 20px 18px;
+    text-align:center;display:none;box-shadow:var(--shadow-lg);}
+  /* ★ 失败卡的居中靠 transform:translate(-50%,-50%)，所以入场动画必须把
+     这个位移写进每个关键帧 —— 直接复用只动 transform 的 layerIn 会在动画期间
+     把居中覆盖掉，卡片会瞬间跳到屏幕右下（实测踩到过）。 */
+  @keyframes cardIn{
+    from{opacity:0;transform:translate(-50%,-50%) scale(.96);}
+    to{opacity:1;transform:translate(-50%,-50%) scale(1);}
+  }
+  #errCard.show{display:block;animation:cardIn .22s var(--ease);}
+  #errCard .eic{font-size:30px;line-height:1;margin-bottom:10px;}
+  #errCard .et{font-size:15px;font-weight:600;color:#fff;margin-bottom:6px;}
+  #errCard .ed{font-size:12.5px;color:var(--fg-dim);line-height:1.6;margin-bottom:16px;
+    word-break:break-all;}
+  #errCard .eb{display:flex;gap:9px;justify-content:center;flex-wrap:wrap;}
+  #errCard .eb button{border:none;border-radius:999px;padding:9px 18px;font-size:13px;
+    font-weight:600;cursor:pointer;transition:transform .16s var(--ease),background .16s var(--ease);}
+  #errCard .eb button:active{transform:scale(.95);}
+  #errCard .eb .p{background:var(--brand-grad);color:#fff;}
+  #errCard .eb .s{background:var(--surface-2);color:var(--fg);border:1px solid var(--line-strong);}
+  #errCard .rt{margin-top:12px;font-size:11.5px;color:var(--fg-mute);}
+  body.tv #errCard{width:min(620px,80%);padding:34px 32px 28px;border-radius:var(--r-xl);}
+  body.tv #errCard .eic{font-size:46px;}
+  body.tv #errCard .et{font-size:24px;}
+  body.tv #errCard .ed{font-size:17px;}
+  body.tv #errCard .eb button{font-size:19px;padding:14px 30px;}
+
+  /* ==========================================================================
+     v2.10 · 半透明浮层（WebView电视风格）
+     全屏播放为主界面；长按中间往右滑 = 频道列表浮层，往左滑 = 设置浮层。
+     浮层盖在播放画面上（半透明黑 + blur），播放不中断；BACK 关浮层。
+     ========================================================================*/
+  /* ★ v2.10.6：底色调到 .42 —— 本机源是原生硬解，视频在 WebView 底下全亮度渲染，
+     0.66 会把视频压得看不清；0.42 能透出画面，文字靠 text-shadow 保证可读 */
+  .ov{position:absolute;inset:0;z-index:6;display:none;background:rgba(0,0,0,.42);
+    animation:layerIn .2s var(--ease);}
+  .ov.show{display:flex;}
+  /* 底色变浅后给文字加投影保可读（视频亮画面直接衬在文字底下） */
+  .ov .cat,.ov .chi,.ov .sopt,.ov .opt,.ov .sec .t{text-shadow:0 1px 3px rgba(0,0,0,.9);}
+  .ovcol{flex-direction:column;}
+  .ovbody{flex:1;display:flex;min-height:0;width:100%;}
+  /* 频道列表浮层顶部：本机源 / 官网源 选择（v2.10.1：旧列表页退役后源入口搬到这里） */
+  #chOvSrc{display:flex;gap:8px;padding:8px 12px;width:100%;
+    border-bottom:1px solid rgba(255,255,255,.08);}
+  #chOvSrc .sopt{padding:6px 14px;border-radius:999px;background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12);font-size:13px;color:var(--fg-dim);cursor:pointer;}
+  #chOvSrc .sopt.on{background:var(--brand-grad);color:#fff;border-color:transparent;font-weight:600;}
+  #chOvSrc .sopt:focus{outline:none;box-shadow:var(--glow);}
+  body.tv #chOvSrc{padding:16px 22px;}
+  body.tv #chOvSrc .sopt{font-size:18px;padding:12px 26px;}
+  /* 频道列表：左侧分组列 + 右侧编号频道列 */
+  #chOv .cats{flex:0 0 92px;overflow:auto;padding:6px 0;
+    border-right:1px solid rgba(255,255,255,.08);scrollbar-width:none;}
+  #chOv .cats::-webkit-scrollbar{display:none;}
+  #chOv .cat{padding:8px 12px;font-size:13px;color:var(--fg-dim);cursor:pointer;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  #chOv .cat:active{background:rgba(255,255,255,.08);}
+  #chOv .cat.on{background:var(--brand-grad);color:#fff;font-weight:600;}
+  #chOv .cat:focus,#chOv .chi:focus,#setOv .opt:focus{outline:none;
+    background:rgba(255,255,255,.12);box-shadow:var(--glow);}
+  #chOv .chs{flex:1;overflow:auto;padding:6px 8px;scrollbar-width:none;}
+  #chOv .chs::-webkit-scrollbar{display:none;}
+  #chOv .chi{display:flex;gap:8px;padding:6px 10px;font-size:13.5px;color:var(--fg);
+    cursor:pointer;border-radius:var(--r-sm);align-items:center;}
+  #chOv .chi .no{color:var(--fg-mute);font-size:11.5px;font-variant-numeric:tabular-nums;
+    flex:0 0 26px;text-align:right;}
+  #chOv .chi .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #chOv .chi:active{background:rgba(255,255,255,.1);}
+  #chOv .chi.on{color:var(--gold);font-weight:700;background:rgba(255,197,49,.1);}
+  body.tv #chOv .cats{flex:0 0 230px;}
+  body.tv #chOv .cat{font-size:19px;padding:16px 22px;}
+  body.tv #chOv .chi{font-size:19px;padding:14px 16px;}
+  /* 设置：右侧半透明面板 */
+  #setOv{justify-content:flex-end;}
+  #setOv .panel{width:min(330px,82%);height:100%;background:rgba(10,11,15,.8);
+    border-left:1px solid rgba(255,255,255,.1);padding:20px 18px;overflow:auto;
+    display:flex;flex-direction:column;gap:20px;scrollbar-width:none;}
+  #setOv .panel::-webkit-scrollbar{display:none;}
+  #setOv .sec .t{font-size:12px;color:var(--fg-mute);margin-bottom:9px;letter-spacing:.04em;}
+  #setOv .opts{display:flex;flex-wrap:wrap;gap:9px;}
+  #setOv .opt{padding:9px 16px;border-radius:999px;background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12);font-size:13.5px;color:var(--fg-dim);cursor:pointer;}
+  #setOv .opt:active{background:rgba(255,255,255,.12);}
+  #setOv .opt.on{background:var(--brand-grad);color:#fff;border-color:transparent;font-weight:600;}
+  #setOv .foot{margin-top:auto;display:flex;align-items:center;gap:14px;
+    color:var(--fg-dim);font-size:13px;}
+  #setOv .foot .ic{font-size:17px;}
+  #setOv .foot .clk{font-variant-numeric:tabular-nums;}
+  #setOv .foot .net{color:#3ddc84;font-variant-numeric:tabular-nums;}
+  #setOv .foot .res{font-variant-numeric:tabular-nums;}
+  body.tv #setOv .panel{width:min(480px,70%);}
+  body.tv #setOv .opt{font-size:18px;padding:13px 24px;}
+  body.tv #setOv .sec .t{font-size:16px;}
+  body.tv #setOv .foot{font-size:17px;}
+
+  /* ★ 无障碍：系统开了「减弱动态效果」时全部降级为瞬时 */
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{
+      animation-duration:.001ms !important;animation-iteration-count:1 !important;
+      transition-duration:.001ms !important;}
+  }
+</style>
+</head>
+<body>
+<!-- ★ v2.10.6：旧列表页（header + scroller：标题/源切换条/搜索框/分类 tabs/频道网格）
+     彻底删除 —— 全屏播放 + 半透明浮层就是唯一界面；「换频道」走 chOv 浮层。 -->
+<div id="webmask"><div class="sp"></div><div id="webmaskTxt">正在打开官方直播页…</div></div>
+
+<div id="player">
+  <!-- ★ <video> 的两个属性都别动（v2.9.1 修「退出横屏时闪一下播放器」）：
+       · 不带 controls —— 带了的话，只要 #vwrap 可见而 <video> 还没挂上流
+         （换线路的间隙、退出横屏播放时 closePlayer 先撤 native-on 再清空 src
+         的那几十到几百毫秒），Chromium 就会画出自带的控制条：0:00 + 进度条。
+       · poster 必须是这张 1×1 透明 GIF —— <video> 没源时 Chromium 会画一张
+         默认海报（一个巨大的播放键），只有「设了 poster」才能压掉它；
+         设成透明就等于什么都不画。实测：poster 一清空，大播放键立刻回来。
+       两件事叠加起来，用户看到的「过渡」就彻底没了（原来是大播放键 + 0:00
+       进度条盖在 #player 黑底上，再叠加旋转动画，几百毫秒必然被看到）。
+       本 App 的播放控制全在自己那套 #ctrl 控制条上（暂停/比例/全屏/线路），
+       从来不需要浏览器原生控件。 -->
+  <div id="vwrap"><video id="v" poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" playsinline webkit-playsinline preload="auto" x5-video-player-type="h5-page" tabindex="0"></video></div>
+  <div id="status">正在解析线路…</div>
+  <div id="ctrl">
+    <!-- 顶部栏：频道名 + 收藏（v2.10.1：「返回」按钮移除 —— 全屏播放为主界面，
+         没有可「返回」的列表页；退出统一走 BACK 的确认退出卡） -->
+    <div id="topbar" class="ctlbar">
+      <div class="cname" id="cname">—</div>
+      <button class="ctlbtn" id="btnFav" tabindex="0"><span class="ic">☆</span><span class="lb">收藏</span></button>
+    </div>
+    <!-- 底部栏：直播标记 + 节目 + 时钟 + 功能钮 -->
+    <div id="botbar" class="ctlbar">
+      <div class="row1">
+        <span class="live-tag">直播</span>
+        <span class="prog" id="progNow">—</span>
+        <span class="clock" id="clockNow"></span>
+        <!-- 播放信息角标（v2.8）：分辨率/帧率/码率/缓冲。点击循环 关 → 简 → 详 -->
+        <span class="statbadge off" id="statBadge" tabindex="0" title="播放信息（点击切换）"></span>
+      </div>
+      <div class="row2">
+        <button class="ctlbtn" id="btnEpg" tabindex="0"><span class="ic">📺</span><span class="lb">节目单</span></button>
+        <button class="ctlbtn" id="btnLines" tabindex="0"><span class="ic">🔄</span><span class="lb">线路</span></button>
+        <button class="ctlbtn" id="btnTune" tabindex="0"><span class="ic">⚡</span><span class="lb">秒开</span></button>
+        <button class="ctlbtn" id="btnPlay" tabindex="0"><span class="ic">⏸</span><span class="lb">暂停</span></button>
+        <button class="ctlbtn" id="btnRatio" tabindex="0"><span class="ic">🖥</span><span class="lb">比例</span></button>
+        <button class="ctlbtn" id="btnFs" tabindex="0"><span class="ic">⛶</span><span class="lb">全屏</span></button>
+      </div>
+    </div>
+    <!-- 线路选择弹层 -->
+    <div id="linePanel">
+      <div class="ttl">选择线路</div>
+      <div class="grid" id="lineGrid"></div>
+    </div>
+    <!-- 节目单 -->
+    <div id="epg"></div>
+  </div>
+  <div id="gestureInd"><span class="ic" id="gIcon">🔆</span><span class="val" id="gVal">50%</span><div class="bar"><i id="gBar"></i></div></div>
+  <!-- 播放失败占位卡：图标 + 原因 + 可操作按钮（替代过去的一行冷文字） -->
+  <div id="errCard">
+    <div class="eic" id="ecIc">⚠️</div>
+    <div class="et" id="ecTitle">暂时无法播放</div>
+    <div class="ed" id="ecDesc"></div>
+    <div class="eb" id="ecBtns"></div>
+    <div class="rt" id="ecRetry"></div>
+  </div>
+  <!-- v2.10 半透明浮层：频道列表 / 设置。长按中间往右滑 = 列表，往左滑 = 设置；
+       盖在播放画面上，播放不中断；BACK 优先关浮层（见 __overlayBack）。 -->
+  <div id="chOv" class="ov ovcol">
+    <div id="chOvSrc"></div>
+    <div class="ovbody">
+      <div class="cats" id="chOvCats"></div>
+      <div class="chs" id="chOvChs"></div>
+    </div>
+  </div>
+  <div id="setOv" class="ov">
+    <div class="panel" id="setPanel"></div>
+  </div>
+</div>
+<div id="toasts"></div>
+
+<script>
+/* ==========================================================================
+ * UI 层：只负责渲染 / 交互 / 播放器
+ * 业务逻辑全部来自 TVCore（shared/web/tv_core.js），与桌面端 core.py 对齐
+ * ========================================================================*/
+var C = window.TVCore;
+var CATS = C.CATS;
+var IS_TV = /[?&]tv=1/.test(location.search) || window.innerWidth >= 960 || window.innerHeight >= 960;
+var cur = { tid:null, id:null, name:null, urls:[], idx:0, epg:[], extra:[] };
+var player = null, ctrlTimer = null;
+/* ★ 会话关闭闸门（必须全局！）：openChannel/playSoft/playWebLine/nextLine/closePlayer
+   是全局函数，__appPause/__appResume 在 init 里定义 —— 若把闸门 var 声明在 init
+   内部，__appPause 写的是闭包变量、闸门读的是全局变量，两个变量互不相通，
+   闸门完全失效（实测 HOME 残声 8 轮修复无效的真正根因，2026-10-11）。 */
+var __sessionClosed = false;
+var __appWasPlaying = false;
+var __freezeT = null;            /* 保帧超时（见 nativeFreeze）：停在列表太久就把画面层也收掉 */
+var __mediaPauseGuardUntil = 0;  /* 我们自己按下 web.onPause 的时间窗，用来挡误判的「切后台」 */
+var __startWatchT = null;        /* 起播看门狗定时器（见 armStartWatch） */
+var __autoHopN = 0;              /* 连续自动跳台次数（见 autoNextChannel）：防整源故障时刷穿列表 */
+var MAX_AUTO_HOP = 5;
+var curCat = "tv", allChans = [];
+var isNativePaused = false;      /* 原生播放器是否被手动暂停 */
+
+/* ---------- 数据源：local=本机直播源 / wvt=官网源（WebViewTV） ----------
+   两边频道表结构完全不同，各自记一份「上次看到哪儿」，来回切不迷路：
+     localCat   本机源下的分类 tid（含 fav）
+     WVT.cur    官网源下的分组名
+   ---------------------------------------------------------------------- */
+var srcMode = "local";
+var localCat = "tv";
+var SRC_TABS = [["wvt", "官网源"], ["local", "本机源"]];   /* 官网源放第一位 */
+
+/* ---------- 官网源（WebViewTV）状态 ---------- */
+var WVT = { ready:false, chans:[], adapters:[], groups:[], byId:{}, list:[], cur:"", loading:false };
+
+function $(id){ return document.getElementById(id); }
+
+/* ======================================================================
+ * 轻量 UI 组件：Toast / 失败占位卡 / 失败原因文案
+ *   toast("已切换到官网源")                        —— 旧签名照旧可用
+ *   toast("线路均不可用", {type:"err", action:{label:"重试", fn:retry}})
+ *   showErrCard({title, reason, btns, retrySec, onRetry})
+ * ==================================================================== */
+var TST_ICON = { info:"ℹ️", ok:"✅", warn:"⚠️", err:"⛔" };
+function toast(text, opt){
+  opt = opt || {};
+  var box = $("toasts"); if(!box) return;
+  var type = opt.type || "info";
+  /* 内容完全相同的提示不重复堆叠：先清掉旧的那条再放新的 */
+  var olds = box.querySelectorAll(".tst");
+  for(var i=0;i<olds.length;i++){
+    if(olds[i].dataset.txt === String(text)){ clearTimeout(olds[i]._t); olds[i].remove(); }
+  }
+  var el = document.createElement("div");
+  el.className = "tst " + type;
+  el.dataset.txt = String(text);
+  var icon = opt.icon || TST_ICON[type] || "";
+  el.innerHTML = (icon ? '<span class="ic">'+icon+'</span>' : '') + '<span class="tx"></span>';
+  el.querySelector(".tx").textContent = text;
+  function dismiss(){
+    clearTimeout(el._t);
+    el.classList.remove("in"); el.classList.add("out");
+    setTimeout(function(){ try{ el.remove(); }catch(e){} }, 240);
+  }
+  if(opt.action && opt.action.label){
+    var b = document.createElement("button");
+    b.className = "act"; b.textContent = opt.action.label; b.tabIndex = -1;
+    b.onclick = function(){ dismiss(); try{ opt.action.fn && opt.action.fn(); }catch(e){} };
+    el.appendChild(b);
+  }
+  box.appendChild(el);
+  requestAnimationFrame(function(){ el.classList.add("in"); });
+  /* 最多同时 3 条，多了把最早的挤掉 */
+  var all = box.querySelectorAll(".tst");
+  for(var j=0;j<all.length-3;j++){ clearTimeout(all[j]._t); all[j].remove(); }
+  var dur = opt.duration || (opt.action ? 5200 : 2200);
+  el._t = setTimeout(dismiss, dur);
+  return dismiss;
+}
+
+/* ---------- 失败原因 → 用户可读文案 ----------
+   原因来源有三处：注入脚本回传的站点原文（__onWebPageFailed / __wvt_reason）、
+   原生 PlaybackException 的 errorCodeName、以及网络异常文本。
+   词表只收「完整说法」，避免「VIP」「限制」这类短词误杀正常提示。 */
+var REASON_MAP = [
+  [/会员|专享|付费|VIP|vip/,              "该内容为会员专享，源站限制了播放", "🔒"],
+  [/播出安排|暂不支持|暂停服务|未开始|已下线/, "该时段源站不提供此节目",        "🕒"],
+  [/地域|地区|仅限|版权/,                 "该节目有地区／版权播放限制",      "🌐"],
+  [/403|429|限流|访问频繁|too many/i,     "源站限流，请稍后再试",           "🚦"],
+  [/404|找不到|不存在|空频道/,            "源站已下线该频道",               "🚫"],
+  [/超时|timeout|连接|network|网络|unreachable|EAI|ENOTFOUND/i,
+                                          "网络连接异常，请检查网络",        "📡"],
+  [/解码|decoder|codec|DecoderInit/i,     "当前设备解码不支持该流",          "🎞"],
+  [/令牌|token|重进|过期/,                "播放令牌已过期，返回重进可刷新",   "🔑"]
+];
+function humanReason(raw){
+  var s = String(raw == null ? "" : raw).trim();
+  if(!s || s === "undefined" || s === "null") return null;
+  for(var i=0;i<REASON_MAP.length;i++){
+    if(REASON_MAP[i][0].test(s)) return { text: REASON_MAP[i][1], icon: REASON_MAP[i][2] };
+  }
+  return { text: s, icon: "⚠️" };
+}
+
+/* ---------- 播放失败占位卡 ----------
+   btns: [{label, primary, fn}]；retrySec>0 且给了 onRetry 时显示自动重试倒计时 */
+var __errCountdown = null;
+/* 清掉所有 Toast —— 失败卡出现时它才是主角，别让浮动的提示压住按钮
+   （横屏只有 360px 高，card 与底部的 toast 一定会打架） */
+function clearToasts(){
+  var box=$("toasts"); if(!box) return;
+  var all=box.querySelectorAll(".tst");
+  for(var i=0;i<all.length;i++){ clearTimeout(all[i]._t); all[i].remove(); }
+}
+function showErrCard(o){
+  o = o || {};
+  clearToasts();
+  var r = humanReason(o.reason);
+  $("ecIc").textContent = r ? r.icon : "⚠️";
+  $("ecTitle").textContent = o.title || "该频道暂时无法播放";
+  $("ecDesc").textContent = o.desc || (r ? r.text : "线路连接失败，可以重试或换一条线路");
+  var box = $("ecBtns"); box.innerHTML = "";
+  (o.btns || []).forEach(function(b){
+    var el = document.createElement("button");
+    el.className = b.primary ? "p" : "s";
+    el.textContent = b.label; el.tabIndex = 0;
+    el.onclick = function(){ hideErrCard(); try{ b.fn && b.fn(); }catch(e){} };
+    box.appendChild(el);
+  });
+  clearInterval(__errCountdown);
+  var rt = $("ecRetry");
+  if(o.retrySec > 0 && o.onRetry){
+    var left = o.retrySec, lb = o.retryLabel || "自动重试";
+    rt.style.display = "block";
+    rt.textContent = "将在 " + left + "s 后" + lb + "…";
+    __errCountdown = setInterval(function(){
+      left--;
+      if(left <= 0){
+        clearInterval(__errCountdown);
+        hideErrCard(); try{ o.onRetry(); }catch(e){}
+        return;
+      }
+      rt.textContent = "将在 " + left + "s 后" + lb + "…";
+    }, 1000);
+  } else { rt.style.display = "none"; rt.textContent = ""; }
+  $("errCard").classList.add("show");
+  resetCtrlTimer();
+}
+function hideErrCard(){
+  clearInterval(__errCountdown); __errCountdown = null;
+  var c = $("errCard"); if(c) c.classList.remove("show");
+}
+
+/* 播放层状态行：busy=true 时带转圈，让「正在连线路」看得出在动 */
+function setStatus(t, busy){
+  var s=$("status"); if(!s) return;
+  if(t == null){ s.style.display="none"; return; }
+  s.style.display="block";
+  s.innerHTML = (busy ? '<i class="sp"></i>' : '') + '<span></span>';
+  s.querySelector("span").textContent = t;
+}
+function logoSrc(n){ return C.logoSrc(n, window.LOGOS); }
+function favArr(){ return C.favArr(); }
+function isFav(t,i){ return C.isFav(t,i); }
+
+/* ---------- 数据源切换（本机源 / 官网源） ----------
+   v2.10.6：旧列表页删除后只剩状态切换 —— 渲染全部由 chOv 浮层负责。 */
+function setSrc(m){
+  if(m===srcMode) return;
+  srcMode=m;
+  if(m==="wvt"){ loadWvt(); } else { loadCat(localCat); }
+  toast(m==="wvt"?"已切换到官网源":"已切换到本机源");
+}
+
+/* 播放/暂停按钮 UI 同步 */
+function setPlayBtnUI(){
+  var b=$("btnPlay");
+  var paused = NATIVE.active ? isNativePaused : ($("v") && $("v").paused);
+  b.querySelector(".ic").textContent = paused ? "▶" : "⏸";
+  b.querySelector(".lb").textContent = paused ? "播放" : "暂停";
+}
+
+/* ---------- 收藏 ---------- */
+function toggleFav(tid,id,name){
+  var added = C.toggleFav(tid,id,name);
+  toast(added ? "已收藏" : "已取消收藏");
+}
+
+/* ---------- EPG ---------- */
+function renderEpg(){
+  var box=$("epg"); box.innerHTML="";
+  if(!cur.epg.length){ box.innerHTML='<div class="row"><div class="pg">暂无节目单</div></div>'; return; }
+  var now=new Date(), hm=("0"+now.getHours()).slice(-2)+":"+("0"+now.getMinutes()).slice(-2), idx=-1;
+  for(var i=0;i<cur.epg.length;i++){ if(cur.epg[i].time<=hm) idx=i; }
+  cur.epg.forEach(function(p,i){
+    var d=document.createElement("div"); d.className="row"+(i===idx?" now":"");
+    d.innerHTML='<div class="tm">'+p.time+'</div><div class="pg">'+p.name+'</div>'+(i===idx?'<div class="rb">直播中</div>':'');
+    box.appendChild(d);
+  });
+}
+
+/* ---------- 播放层显示/隐藏（带过渡） ----------
+   进场靠 CSS keyframes（挂在 .show 上，不会出现「忘了加类导致不可见」）；
+   出场要先加 .closing 淡出 170ms 再摘 .show —— display:none 是没法过渡的。 */
+var __layerHideT = null;
+/* 播放层可见时把网页整体转透明（见 CSS 里 frame-on / native-on 的说明）。
+   这样下层无论是「保帧画面」还是「原生 TextureView」都能透出来。 */
+function setFrameOn(){
+  try{ document.documentElement.classList.add("frame-on"); document.body.classList.add("frame-on"); }catch(e){}
+}
+function clearFrameOn(){
+  try{ document.documentElement.classList.remove("frame-on"); document.body.classList.remove("frame-on"); }catch(e){}
+}
+function showPlayerLayer(){
+  var p=$("player");
+  clearTimeout(__layerHideT);
+  p.classList.remove("closing");
+  p.classList.add("show");
+  setFrameOn();
+  startStatWatch();     /* 底栏播放信息角标（v2.8）随之开始刷新 */
+}
+
+/* ---------- 播放 ---------- */
+function openChannel(tid, id, name){
+  __sessionClosed = false;      /* ★ 用户显式开新频道：重新开闸 */
+  /* v2.10：浮层里点频道 —— 先关浮层并拆掉上一频道的官方页层。
+     closePage 是延迟 150ms 的 seq 防御拆除：若接下来 playWebLine 又开了
+     新官方页（pageSeq 已 ++），旧拆除自动失效；本机源/直链频道则真正拆掉。 */
+  closeAllOv();
+  /* ★ v2.10.2：closePage 拆掉旧官方页会回调 __onWebPageClosed，而它在 webState===0
+     时会 closePlayer() 弹回旧列表 —— 从官网源切到本机源点频道必踩（官网源放的
+     时候 pageView 还活着）。先打「换台拆页」标记，回调见到就只拆页不动播放层；
+     1s 后自动清（wvt→wvt 换台时 showPage 会 pageSeq++ 令 hidePage 失效，
+     回调根本不来，不留陈旧标记吞掉之后真正的退出）。 */
+  window.__pageSwap = true;
+  setTimeout(function(){ window.__pageSwap = false; }, 1000);
+  try{ if(window.NativeTV && NativeTV.closePage) NativeTV.closePage(); }catch(e){}
+  /* v2.10：记住上次频道（重启自动恢复起播用） */
+  try{ localStorage.setItem("tv_last_ch", JSON.stringify({tid:String(tid), id:String(id), name:String(name)})); }catch(e){}
+  cur.tid=tid; cur.id=id; cur.name=name; cur.urls=[]; cur.idx=0; cur.epg=[];
+  NATIVE.deadIdx = {};          /* ★ 新频道：清空「哪几条线路硬解失败过」，全部重新允许原生 */
+  NATIVE.lastStats = null;      /* ★ 新频道：丢弃上一个频道的统计缓存，角标别显示旧分辨率 */
+  hideErrCard();
+  /* ★ 无缝换台：showPlayerLayer() 会把 WebView 转透明（frame-on），
+     Java 侧上一次退出时钉下的那一帧立刻透出来当背景 —— 用户看到的是
+     「画面还在，下面一行正在解析线路…」，而不是一块黑。不必在这里判断
+     有没有帧：没有帧时露出的就是原来的黑，和旧行为一致。 */
+  $("cname").textContent=name;
+  setFavBtnUI();
+  $("btnEpg").className="ctlbtn"; $("epg").classList.remove("show");
+  closeLinePanel();
+  $("ctrl").classList.remove("hide"); resetCtrlTimer();
+  showPlayerLayer();
+  /* ★ 手机端：进入播放自动转横屏全屏，避免竖屏下视频只占上面一小条。
+     竖屏手机屏宽有限，横屏才能让 16:9 视频真正铺满可视面积。
+     TV（IS_TV）本身就横屏，不需要切。 */
+  if(!IS_TV && window.NativeTV && NativeTV.setLandscape) setFsMode(true);
+  setStatus("正在解析线路…", true);
+  $("lineGrid").innerHTML="";
+  /* ★ 官网源：线路表本地就有，不需要请求接口，也不需要测速 */
+  if(tid==="wvt"){
+    var ch=WVT.byId[id];
+    if(!ch){ setStatus("频道信息缺失"); return; }
+    cur.urls=ch.urls.map(function(u){return u.url;});
+    cur.extra=ch.urls.map(function(u){return u.extra||"";});
+    renderLines(); updateProgNow(); setLineUI();
+    var directN=cur.urls.filter(function(u){return WVTCore.isDirect(u);}).length;
+    setStatus(directN ? "官网源 · 直连线路" : "官网源 · 正在打开官方页面…", !directN);
+    playIdx(0);
+    return;
+  }
+  C.fetchPlay(tid, id).then(function(res){
+    /* ★ 请求在途时用户已经退出播放层 → 整条链作废。
+       没有这道闸门的话，下面的 playIdx() 会在用户退回列表之后
+       把频道重新拉起来（resumeWebMedia + 起播），即「按了返回却又冒出声音」。
+       与 nextLine()/playSoft()/playWebLine() 的闸门是同一类问题（v2.4.7 残留的变体）。 */
+    if(__sessionClosed) return;
+    cur.epg = res.epg || [];
+    if(!res.urls.length){
+      setStatus(null);
+      showErrCard({ title:"线路解析失败", reason:"播放令牌已过期，返回重进可刷新",
+        btns:[{label:"重试", primary:true, fn:function(){ openChannel(tid,id,name); }},
+              {label:"换频道", fn:closePlayer}] });
+      return;
+    }
+    cur.urls=res.urls; renderLines(); updateProgNow();
+    if(IS_TV){ var f=document.querySelector("#lineGrid .line-item"); if(f) f.focus(); }
+    /* ★ 选路结果缓存 5 分钟：同一个频道再进来直接命中，省掉整轮测速
+       （实测「换台慢」里最容易被感知的等待，就是这段并发探测） */
+    var key = tid+"/"+id, hit = LINE_CACHE[key];
+    if(hit && Date.now()-hit.ts < 300000 && hit.best < cur.urls.length){
+      playIdx(hit.best);
+      return;
+    }
+    setStatus("正在测速选路…", true);
+    pickBestLine(cur.urls).then(function(best){
+      if(__sessionClosed) return;         /* ★ 测速也可能跑很久，同样要复查闸门 */
+      cacheLine(key, best);
+      playIdx(best);
+    }).catch(function(){ if(!__sessionClosed) playIdx(0); });
+  }).catch(function(e){
+    /* ★ 同上：别把失败卡弹到用户已经退回去的列表上（实测踩到） */
+    if(__sessionClosed) return;
+    setStatus(null);
+    showErrCard({ title:"网络连接异常", reason:String(e),
+      btns:[{label:"重试", primary:true, fn:function(){ openChannel(tid,id,name); }},
+            {label:"换频道", fn:closePlayer}],
+      retrySec:8, onRetry:function(){ openChannel(tid,id,name); } });
+  });
+}
+
+/* 选路结果缓存（key → {best, ts}）：5 分钟 TTL，最多留 40 条 */
+var LINE_CACHE = {};
+function cacheLine(key, best){
+  LINE_CACHE[key] = { best: best, ts: Date.now() };
+  var ks = Object.keys(LINE_CACHE);
+  if(ks.length > 40){
+    ks.sort(function(a,b){ return LINE_CACHE[a].ts - LINE_CACHE[b].ts; })
+      .slice(0, ks.length-40).forEach(function(k){ delete LINE_CACHE[k]; });
+  }
+}
+
+/* 收藏按钮 UI（新样式：顶部栏 ctlbtn） */
+function setFavBtnUI(){
+  var b=$("btnFav");
+  var on=isFav(cur.tid,cur.id);
+  b.className="ctlbtn"+(on?" act":"");
+  b.querySelector(".ic").textContent=on?"★":"☆";
+  b.querySelector(".lb").textContent=on?"已收藏":"收藏";
+}
+
+/* 底部栏：当前节目名 + 时钟 */
+function updateProgNow(){
+  var p=$("progNow");
+  if(cur.epg && cur.epg.length){
+    var now=new Date(), hm=("0"+now.getHours()).slice(-2)+":"+("0"+now.getMinutes()).slice(-2), curP="";
+    for(var i=0;i<cur.epg.length;i++){ if(cur.epg[i].time<=hm) curP=cur.epg[i].name; }
+    p.textContent=curP||"";
+  } else { p.textContent=""; }
+}
+function updateClock(){
+  var d=new Date(); $("clockNow").textContent=("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
+}
+
+/* ---------- 线路智能测速选优 ----------
+   探测每条线路的「首字节延迟」与「视频分辨率/码率」。
+   低端设备解不动 1080p@2.4Mbps —— 优先选码率低的线路，避免解码跟不上导致卡顿。
+   评分 = 延迟权重 + 码率惩罚（低端机惩罚系数更大）。                        */
+function probeLine(url, timeoutMs){
+  return new Promise(function(resolve){
+    var t0=Date.now(), done=false, xhr=new XMLHttpRequest();
+    var finish=function(rtt, br){
+      if(done) return; done=true;
+      try{xhr.abort();}catch(e){}
+      resolve({rtt: rtt, br: br});   /* rtt=首字节ms, br=估算kbps(0=未知) */
+    };
+    var to=setTimeout(function(){ finish(1e9, 0); }, timeoutMs);
+    try{
+      xhr.open("GET", url, true);
+      xhr.responseType="arraybuffer";
+      xhr.onprogress=function(ev){
+        /* 拿到首批数据 → 既算延迟也算瞬时速率 */
+        if(!done && ev.loaded >= 2048){
+          clearTimeout(to);
+          var dt=(Date.now()-t0)/1000;
+          var kbps = dt>0 ? Math.round(ev.loaded*8/1000/dt) : 0;
+          finish(Date.now()-t0, kbps);
+        }
+      };
+      xhr.onreadystatechange=function(){
+        if(xhr.readyState===2){ /* 已收到响应头，记录首字节时间（下限） */
+          if(!done){ /* 先记为候选，等 onprogress 拿更准的码率 */ }
+        }
+      };
+      xhr.onerror=function(){ clearTimeout(to); finish(1e9, 0); };
+      /* 取 64KB 头：足够覆盖 FLV metadata，能读到 width/height/videodatarate */
+      try{ xhr.setRequestHeader("Range","bytes=0-65535"); }catch(e){}
+      xhr.send();
+    }catch(e){ clearTimeout(to); finish(1e9, 0); }
+  });
+}
+function pickBestLine(urls){
+  var n=Math.min(urls.length, 8), tasks=[];
+  for(var i=0;i<n;i++) tasks.push(probeLine(urls[i], 2500));
+  return Promise.all(tasks).then(function(rs){
+    /* 低端机：码率惩罚 3 倍（宁可选低清也别卡）；中高端：只轻微考虑码率 */
+    var wBr = (TIER === "low") ? 3.0 : 0.6;
+    var best=0, bestScore=Infinity;
+    for(var i=0;i<n;i++){
+      var r=rs[i];
+      var score;
+      if(r.rtt>=1e9){ score = 1e7 + i; }              /* 失败线路垫底 */
+      else {
+        /* 归一化：延迟(s) + 码率(Mbps)*权重；低码率得分更低 → 更容易被选中 */
+        var latS = r.rtt/1000;
+        var mbps = r.br/1000;
+        score = latS + mbps*wBr;
+      }
+      if(score<bestScore){ bestScore=score; best=i; }
+    }
+    return best;
+  });
+}
+
+/* 兼容旧名 */
+function pickFastest(urls){ return pickBestLine(urls); }
+
+/* 对每条线路发一次轻量探测，测「首字节延迟」；返回最快线路的索引。
+   超时/失败的线路排到最后，避免默认走慢线路造成起播卡顿。 */
+function probeOnce(url, timeoutMs){
+  return new Promise(function(resolve){
+    var t0=Date.now(), done=false, xhr=new XMLHttpRequest();
+    var finish=function(ok){ if(done) return; done=true; try{xhr.abort();}catch(e){} resolve(ok?Date.now()-t0:1e9); };
+    var to=setTimeout(function(){ finish(false); }, timeoutMs);
+    try{
+      xhr.open("GET", url, true);
+      xhr.responseType="arraybuffer";
+      xhr.onreadystatechange=function(){
+        /* 2 = HEADERS_RECEIVED：首字节到手，足够判断延迟 */
+        if(xhr.readyState===2){ clearTimeout(to); finish(true); }
+      };
+      xhr.onerror=function(){ clearTimeout(to); finish(false); };
+      /* Range 只取头部，减少流量 */
+      try{ xhr.setRequestHeader("Range","bytes=0-1023"); }catch(e){}
+      xhr.send();
+    }catch(e){ clearTimeout(to); finish(false); }
+  });
+}
+function renderLines(){
+  var w=$("lineGrid"); w.innerHTML="";
+  cur.urls.forEach(function(u,i){
+    var d=document.createElement("div"); d.className="line-item"+(i===cur.idx?" on":"");
+    d.innerHTML='<span class="ic">'+(i===cur.idx?"✅":"📡")+'</span><span class="lb">线路'+(i+1)+'</span>';
+    d.tabIndex=0; d.onclick=function(){ playIdx(i); closeLinePanel(); };
+    w.appendChild(d);
+  });
+}
+function setLineUI(){
+  var ls=$("lineGrid").children; for(var i=0;i<ls.length;i++){
+    ls[i].className="line-item"+(i===cur.idx?" on":"");
+    var ic=ls[i].querySelector(".ic"); if(ic) ic.textContent=(i===cur.idx?"✅":"📡");
+  }
+}
+function openLinePanel(){ $("linePanel").classList.add("show"); resetCtrlTimer(); }
+function closeLinePanel(){ $("linePanel").classList.remove("show"); }
+/* ==================== 原生硬解通道（v1.4 新增） ====================
+   为什么加：mpegts.js 是 JS 软解，1080p@2.4Mbps 在 4 核低端机上解不过来（实测 20 秒只推进 4.6 秒）。
+   v1.2 靠调参把指标压到 106%，但那是软解天花板，源一重还是卡。
+
+   现在的策略：优先走原生 ExoPlayer（MediaCodec 硬解，H.264/H.265 交给 DSP，CPU 几乎不参与）。
+   画面由原生 SurfaceView 输出（铺在 WebView 之下），网页只负责画控制条浮层 + 发指令。
+   mpegts.js 保留为兜底：老设备无原生桥、或原生播放直接报错时，自动回落到软解。
+
+   判定顺序：hasNativePlay() → nativePlay(url)；任何一步抛错或返回 false → 走 mpegts 软解。 */
+var NATIVE = {
+  ok: false,        /* 原生桥是否可用（开机探测一次） */
+  active: false,    /* 当前是否正在走原生播放 */
+  probing: false,
+  deadIdx: {},      /* ★ 硬解失败过的**线路下标**（v2.7 前是频道级 dead，见 playIdx 注释） */
+  frozen: false,    /* 已退出播放层但画面层被保留（TextureView 上停着最后一帧） */
+  firstFrame: false,/* 本次起播是否已出首帧（起播看门狗据此决定要不要换线） */
+  lastUrl: "",
+  timer: null,      /* 卡死看护定时器 */
+  lastPos: 0,       /* 上一次读到的播放位置（判断是否零推进） */
+  lastStats: null,  /* ★ 最近一次 nativeStats() 的结果（v2.8）：角标只读缓存，
+                       否则每 2 秒再来一次 CountDownLatch(300ms) 会白白卡住 WebView */
+  stallN: 0,
+  stallT: 0
+};
+
+function hasNative(){
+  try{
+    return !!(window.NativeTV && NativeTV.hasNativePlay && NativeTV.hasNativePlay());
+  }catch(e){ return false; }
+}
+NATIVE.ok = hasNative();
+
+/* 原生「真的活了」的统一处理：收状态行、清重连计数、撤起播看门狗、复位卡顿计时。
+   （v2.6 抽出来，是因为「ready / size（非 0x0）/ firstframe」三个信号都要走同一套收尾） */
+function nativeLive(){
+  var s = $("status"); if(s) s.style.display = "none";
+  hideErrCard();
+  NATIVE.retry = 0;                     /* 连上了就清零重连计数 */
+  markFirstFrame();                     /* ★ 出首帧：撤起播看门狗 + 清自动跳台计数 */
+  /* ★ 复位卡顿计时（v2.7 修）：这里原来写的是**全局** `stallN/stallT`，而卡顿看护
+     （bindNativeWatch）读的是 `NATIVE.stallN/NATIVE.stallT` —— 两套变量，等于这行
+     从来没生效过。后果：起播耗时超过 8s 的线路，firstFrame 置位的**同一时刻**
+     `Date.now() - NATIVE.stallT` 就已经 > 8000，下一个 2.5s 轮询就会把它当「起播后
+     零推进」换掉 —— 明明刚起来就被换线。 */
+  NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+}
+
+/* 原生播放状态回调（由 MainActivity 注入：window.__onNativeState(state, detail)） */
+window.__onNativeState = function(state, detail){
+  try{
+    if(!NATIVE.active) return;
+    if(state === "buffering"){
+      setStatus("连接线路"+(cur.idx+1)+"…", true);
+    } else if(state === "ready" || state === "firstframe"){
+      nativeLive();
+    } else if(state === "size"){
+      /* ★★ 只认「有真实宽高」的 size（v2.6 踩坑）：
+         media3 在 setMediaItem 切换媒体项时会先发一次 VideoSize.UNKNOWN，detail 是
+         "0x0" —— 那不是出帧。实测（tools/_probe_watchdog.py）正是这条假 size 让
+         markFirstFrame() 在看门狗布防的同一帧把它撤掉，于是挂起线路永远等满超时：
+             ['buffering','switch'] → ['tracks','0'] → ['size','0x0']
+         所以 0x0 当没看见 —— 既不能撤看门狗，也不能顺手收掉状态行（那会让用户
+         看着一张定格画面却没有任何「正在连接」的提示）。 */
+      var mm = /^(\d+)x(\d+)$/.exec(String(detail || ""));
+      if(mm && parseInt(mm[1],10) > 0 && parseInt(mm[2],10) > 0) nativeLive();
+    } else if(state === "decoder"){
+      /* 原生回传命中的解码器名（hw:xxx / sw-only），仅日志用途 */
+      try{ console.log("[native decoder]", detail); }catch(e){}
+    } else if(state === "ended"){
+      /* 直播 FLV 的连接被 CDN 掐断时 ExoPlayer 会报 ended——这不是线路坏，
+         重连同一条线路即可（比烧掉一条线路划算得多）。
+         同一条线路连续重连 2 次仍断，才换下一条。 */
+      NATIVE.retry = (NATIVE.retry || 0) + 1;
+      if(NATIVE.retry <= 2 && NATIVE.active && NATIVE.lastUrl && NativeTV.nativeSwitch){
+        toast("直播流断开，自动重连…", {type:"warn"});
+        setTimeout(function(){
+          try{ if(NATIVE.active && NativeTV.nativeSwitch) NativeTV.nativeSwitch(NATIVE.lastUrl); }catch(e){}
+        }, 600);
+      } else {
+        NATIVE.retry = 0;
+        nextLine();
+      }
+    } else if(state === "hlsskip"){
+      /* 原生自己在原地重播了**同一条流**（HLS 分片级错误 → 跳到直播边缘，见
+         Media3PlayerBackend.onPlayerError 的注释）。画面层不用动 —— 只把「正在重试」
+         告诉用户，并把卡顿计时复位：否则 8s 卡顿看护会在自救期间抢跑换线，等于白救。 */
+      setStatus("线路"+(cur.idx+1)+"分片异常，跳到直播位置重试…", true);
+      NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+    } else if(state === "error"){
+      /* ★ 换内核重播同一条 URL —— 「第 1 级兜底」（v2.7）
+         判据来自 TVBoxOS 的 switchLivePlayerAndReplay（LivePlayActivity.java:2327-2343）：
+         **「这个解码器解不了」≠「这条线路不通」**。换内核比换线路便宜得多
+         （不用回接口重取 token、不用重新测速），而且能救回那些**线路本身完全正常**、
+         只是 ExoPlayer 解不了的频道。第 2 级才是 nextLine（软解也失败时才会走到）。 */
+      if(NATIVE.active && !NATIVE.probing){
+        toast("硬解失败，换软解重播同一条线路", {type:"warn"});
+        NATIVE.active = false;
+        /* ★ 只把**这一条**线路记成「硬解不可用」（v2.7 收窄粒度）：
+           以前是频道级 dead —— 线路 1 硬解失败后，本频道后续所有线路都直走软解，
+           等于让一条坏线路连坐了本来原生能播的线路。 */
+        NATIVE.deadIdx[cur.idx] = true;
+        setTimeout(function(){ playSoft(cur.idx); }, 200);
+      }
+    }
+  }catch(e){}
+};
+
+/* ==================== 起播看门狗（v2.6，借鉴 TVBoxOS） ====================
+   问题（已记录在案）：挂起型线路会一直停在 CONNECTING / BUFFERING，我们过去
+   没有任何东西在计时，只能干等 ExoPlayer 的 readTimeout(15s) —— 三条线路
+   逐条等满，换台兜底整链可超 90s（e2e 步骤预算都被迫放宽到 150s）。
+
+   TVBoxOS 的做法（LivePlayActivity.java:2266-2360）是把「等多久」的决策权
+   从网络层收回到播放器状态机：进入 PREPARING/BUFFERING 起算
+   (LIVE_CONNECT_TIMEOUT+1)*5s，到点不问原因直接换源。
+
+   我们的等价实现：playIdx 起播前起一个定时器，出首帧（原生 ready/size、
+   <video> playing、官网页 playing）就撤掉；到点还没出帧 → nextLine()。
+   超时值跟「秒开 / 稳定」档联动：秒开 10s（激进换线，和 TVBoxOS 默认一致），
+   稳定 15s（弱网多给一点耐心）。只在原生/软解路径上布防，官网网页线路
+   有自己的页面看门狗与注入脚本兜底，不重复布置避免双跳。 */
+function startWatchMs(){ return (TUNE === "stable") ? 15000 : 10000; }
+function clearStartWatch(){ if(__startWatchT){ clearTimeout(__startWatchT); __startWatchT = null; } }
+function armStartWatch(){
+  clearStartWatch();
+  NATIVE.firstFrame = false;
+  __startWatchT = setTimeout(function(){
+    __startWatchT = null;
+    if(__sessionClosed) return;                      /* 已退出播放层：不折腾 */
+    if(NATIVE.firstFrame) return;                    /* 竞态兜底：已经出帧了 */
+    var n = (cur.urls || []).length;
+    toast("线路"+(cur.idx+1)+"起播超时"+(n>1 ? "，切换下一条" : ""), {type:"warn"});
+    nextLine(true);                                  /* 不看位置、不等 readTimeout（原因已报） */
+  }, startWatchMs());
+}
+/* 出首帧了 —— 撤看门狗，并把「连续自动跳台」计数清零（能起播就说明源没问题） */
+function markFirstFrame(){ NATIVE.firstFrame = true; clearStartWatch(); __autoHopN = 0; }
+
+/* 原生看护：定期读播放器统计，长时间零推进判定为卡死 → 切下一条线路。
+   ★ 只管「起播之后」（v2.6）：起播阶段 pos 一直是 0，如果不加 firstFrame 闸门，
+   这里会在第 8 秒就换线，把 10s 的起播看门狗永远挡在后面 —— 两个机制会互相抢。
+   分工：起播没出帧 = armStartWatch 的事（10/15s，到点不问原因）；
+        起播之后零推进 = 这里的事（8s）。 */
+function bindNativeWatch(){
+  clearInterval(NATIVE.timer);
+  NATIVE.timer = setInterval(function(){
+    if(!NATIVE.active) return;
+    try{
+      var raw = NativeTV.nativeStats ? NativeTV.nativeStats() : "{}";
+      var s = (typeof raw === "string") ? JSON.parse(raw) : raw;
+      NATIVE.lastStats = s;      /* ★ 缓存给底栏角标复用（v2.8，避免重复阻塞调用） */
+      /* 位置长时间不动 → 判卡死。
+         ★ 判据用「变化量的绝对值」而不是「只认前进」（v2.7 修）：
+         直播流的 position 是相对当前 window 算的，playlist 滑动时**会往回跳**。
+         实测（tools/_probe_hls_live.py，窗口只有 3 个分片）看到 pos 从 17220
+         回绕到 13206 —— 旧判据 `pos > lastPos + 200` 会把它当成「零推进」，
+         于是明明画面在动，8 秒后却被卡顿看护判死、弹出「卡顿，切换下一条」。
+         有动静就是有动静，往前跳和往后跳都算。 */
+      if(typeof s.pos === "number" && s.pos >= 0){
+        if(Math.abs(s.pos - NATIVE.lastPos) > 200){
+          NATIVE.lastPos = s.pos; NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+        } else if(NATIVE.firstFrame && Date.now() - NATIVE.stallT > 8000){
+          toast("线路"+(cur.idx+1)+"卡顿，切换下一条", {type:"warn"});
+          NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+          nextLine();
+        }
+      }
+    }catch(e){}
+  }, 2500);
+}
+
+/* ==================== 播放信息角标（v2.8，借鉴 TVBoxOS） ====================
+   TVBoxOS 有 LIVE_SHOW_NET_SPEED / LIVE_SHOW_RESOLUTION / LIVE_SHOW_TIME 三个
+   开关（HawkConfig.java:15-59），我们一直有 stats() 却没接到 UI 上 —— 这里补一个
+   底栏小角标，让用户能一眼看出「现在这条线路是几路／清不清晰／缓冲够不够」。
+
+   三态循环（点击角标切换，存 localStorage，重启仍生效）：
+     0 关：只留一个很淡的 ⓘ 入口（否则关掉就再也点不开了）
+     1 简：1080P · 硬解
+     2 详：1920×1080 · 硬解 · ↓2.4M · 缓冲4.1s
+   ★ 帧率只在源里声明了 FRAME-RATE 时才显示（国内 IPTV 源多数没声明，
+     media3 报 Format.NO_VALUE=-1）→ 此时退化为「硬解 / 软解」标记：
+     对用户更有用（软解 = 这条线路在烧 CPU，卡顿时能一眼看出根因）。
+
+   数据来源分两路 —— **不新增阻塞调用**：
+     · 原生硬解：复用 bindNativeWatch 每 2.5s 已经取回的 stats（NATIVE.lastStats），
+       角标只读缓存。若在这里自己再调一次 nativeStats()，就会叠加一次
+       CountDownLatch(最多 300ms) 的同步等待，白白把 WebView 主线程卡住。
+     · 软解（mpegts.js）：直接读 <video> 的 videoWidth/videoHeight/buffered（非阻塞）。
+     ⚠ 官网网页线路看不到这个角标 —— 那条路是 WebView 直接导航到官方页面
+       （NativeTV.openPage），我们自己的播放层 UI 已经不在页面上。
+   颜色：正常灰白；缓冲 <1s 或播放器不在播放状态 → 金色提醒（只是让人一眼看出快撑不住）。 */
+var STATS_MODE = 1;   /* 0 关 / 1 简 / 2 详 */
+try{ var _sm = parseInt(localStorage.getItem("tv_stats"), 10); if(_sm >= 0 && _sm <= 2) STATS_MODE = _sm; }catch(e){}
+var __statT = null;
+
+function cycleStatsMode(){
+  STATS_MODE = (STATS_MODE + 1) % 3;
+  try{ localStorage.setItem("tv_stats", String(STATS_MODE)); }catch(e){}
+  toast(STATS_MODE === 0 ? "已关闭播放信息角标"
+      : STATS_MODE === 1 ? "播放信息：简（分辨率 · 帧率）"
+                         : "播放信息：详细（分辨率 · 帧率 · 带宽 · 缓冲）", {type:"ok"});
+  updateStatBadge();
+}
+function fmtRes(w, h){
+  var short = Math.min(w, h);
+  if(w >= 3800 || short >= 2100) return "4K";
+  if(w >= 1900 || short >= 1000) return "1080P";
+  if(w >= 1200 || short >= 700)  return "720P";
+  if(w >= 800)                   return "480P";
+  return w + "×" + h;
+}
+function fmtBw(bps){
+  if(bps >= 1000000) return (bps / 1000000).toFixed(1) + "M";
+  return Math.round(bps / 1000) + "k";
+}
+function updateStatBadge(){
+  var b = $("statBadge"); if(!b) return;
+  if(STATS_MODE === 0){ b.className = "statbadge off"; b.textContent = "ⓘ"; return; }
+  var w = 0, h = 0, fps = 0, bw = 0, buf = -1, playing = false, hw = -1;
+  if(NATIVE.active && NATIVE.lastStats){
+    var s = NATIVE.lastStats;
+    w = s.w || 0; h = s.h || 0; bw = s.bw || 0;
+    /* ★ fps 要过滤 Format.NO_VALUE(-1)：国内 IPTV 的 HLS 多数不在
+       #EXT-X-STREAM-INF 里声明 FRAME-RATE，media3 就报 -1.0 —— 直接格式化
+       会显示成「-1fps」（实测踩到）。同理码率 br 也常是 -1，所以不作展示。 */
+    fps = Math.round(s.fps || 0); if(!(fps > 0)) fps = 0;
+    if(typeof s.hw === "number") hw = s.hw;
+    if(typeof s.bufferedMs === "number" && s.bufferedMs >= 0) buf = s.bufferedMs;
+    playing = !!s.playing;
+  } else {
+    var v = $("v");
+    if(v && v.videoWidth){
+      w = v.videoWidth; h = v.videoHeight;
+      try{
+        var bf = v.buffered;
+        if(bf && bf.length) buf = Math.max(0, Math.round((bf.end(bf.length - 1) - v.currentTime) * 1000));
+      }catch(e){}
+      playing = !v.paused;
+    }
+  }
+  /* 还没拿到视频尺寸（刚起播 / 只有音频）：给个「…」占位，别显示半截信息 */
+  if(!w || !h){ b.className = "statbadge"; b.textContent = "…"; return; }
+  /* fps 拿不到时（很常见）改显示「硬解 / 软解」—— 对用户比一个空缺更有用：
+     软解意味着这条线路在烧 CPU，卡顿/发热时能一眼看出根因。 */
+  var tail = fps ? (fps + "fps") : (hw === 1 ? "硬解" : (hw === 0 ? "软解" : ""));
+  var seg = [];
+  if(STATS_MODE === 2){
+    seg.push(w + "×" + h);
+    if(tail) seg.push(tail);
+    if(bw > 0) seg.push("↓" + fmtBw(bw));
+    if(buf >= 0) seg.push("缓冲" + (buf / 1000).toFixed(1) + "s");
+  } else {
+    seg.push(fmtRes(w, h));
+    if(tail) seg.push(tail);
+  }
+  b.textContent = seg.join(" · ");
+  b.className = "statbadge" + (((buf >= 0 && buf < 1000) || !playing) ? " warn" : "");
+}
+function startStatWatch(){
+  stopStatWatch();
+  updateStatBadge();
+  __statT = setInterval(updateStatBadge, 2000);
+}
+function stopStatWatch(){
+  if(__statT){ clearInterval(__statT); __statT = null; }
+  var b = $("statBadge"); if(b) b.className = "statbadge off";
+}
+
+/* 开始原生播放；返回 false 表示原生通道不可用（调用方回落软解） */
+function playNative(url, headers){
+  if(!NATIVE.ok || !window.NativeTV || !NativeTV.nativePlay) return false;
+  try{
+    NATIVE.active = true; NATIVE.probing = true; NATIVE.lastUrl = url;
+    NATIVE.frozen = false; clearTimeout(__freezeT);   /* 播放器接管了画面层，保帧状态结束 */
+    NATIVE.lastPos = 0; NATIVE.stallN = 0; NATIVE.stallT = Date.now();
+    try{ document.documentElement.classList.add("native-on"); document.body.classList.add("native-on"); }catch(e){}
+    setFrameOn();   /* 保帧模式下 frame-on 已由 showPlayerLayer 加过；这里再兜一次 */
+    /* ★ headers（v2.9）：官网源提取到的直链要带 Referer/Cookie → 走 nativePlayExt
+       （全量重建播放器，请求头在构建 DataSource 时设死）。
+       本机源 / 官网源里的裸直链依旧走 nativePlay —— 老路径零改动。 */
+    var r;
+    if(headers && window.NativeTV.nativePlayExt){
+      r = NativeTV.nativePlayExt(url, (typeof headers === "string") ? headers : JSON.stringify(headers));
+    } else {
+      r = NativeTV.nativePlay(url);
+    }
+    /* 切线路时用 nativeSwitch（保播放器实例，避免黑屏）；首次播放用 nativePlay */
+    setStatus("连接线路"+(cur.idx+1)+"…", true);
+    bindNativeWatch();
+    NATIVE.probing = false;
+    return (r === undefined) ? true : !!r;
+  }catch(e){
+    NATIVE.active = false; return false;
+  }
+}
+function nativeSwitch(url){
+  if(!NATIVE.active || !window.NativeTV || !NativeTV.nativeSwitch) return false;
+  try{
+    NATIVE.lastUrl = url; NATIVE.lastPos = 0; NATIVE.stallT = Date.now();
+    NativeTV.nativeSwitch(url);
+    setStatus("连接线路"+(cur.idx+1)+"…", true);
+    return true;
+  }catch(e){ return false; }
+}
+function nativeStop(){
+  NATIVE.active = false;
+  NATIVE.frozen = false;
+  clearInterval(NATIVE.timer);
+  clearTimeout(__freezeT);
+  try{ document.documentElement.classList.remove("native-on"); document.body.classList.remove("native-on"); }catch(e){}
+  clearFrameOn();
+  try{ if(window.NativeTV && NativeTV.nativeStop) NativeTV.nativeStop(); }catch(e){}
+  /* 注意：这里不能调 pauseWebMedia！nativeStop 也被 playSoft/playWebLine
+     当「切线路/切源前清理」用，web.onPause() 会把 WebView 的网络/媒体管线
+     挂起，后续线路的拉流全部卡死（实测 12 个频道连败的教训）。
+     真正退出播放层（closePlayer）才需要停 WebView 媒体。 */
+}
+
+/* ==================== 无缝换台：画面层保帧（v2.5.1） ====================
+   问题（实测）：BACK 退出播放层时 nativeStop 会把 TextureView 一起摘掉，
+   而 MainActivity 的 WebView 是 setBackgroundColor(TRANSPARENT)、根视图是黑的 ——
+   于是「BACK → 点另一个频道」中间要一直黑到新流首帧（_probe_seam.py 亮度采样）。
+
+   做法：退出播放层改成 nativeFreeze() —— Java 侧先把最后一帧抓成 Bitmap
+   钉在画面层与 WebView 之间，再释放播放器；下次 openChannel 时
+   showPlayerLayer() 会把 WebView 转透明（frame-on），这一帧立刻透出来，
+   状态行叠在它上面说「正在解析线路…」，新流 onRenderedFirstFrame 时才撤掉
+   —— 全程没有黑屏。
+
+   为什么不直接保留 TextureView：实测 release() 会把纹理内容一起清空
+   （揭帧后整屏亮度 0.0），光留着 view 是白留。详见 FrozenFrame.java。
+
+   代价：内存里多一张 Bitmap（本机 640x360，<1MB）。所以停在列表超过
+   3 分钟就自动收掉（__freezeT）。 */
+
+/* 退出播放层（保帧版）：返回「是否真的留住了画面层」 */
+function nativeFreeze(){
+  NATIVE.active = false;
+  clearInterval(NATIVE.timer);
+  clearTimeout(__freezeT);
+  clearStartWatch();               /* 已退出播放层：起播看门狗必须撤，否则它会在列表上换线 */
+  stopStatWatch();                 /* 角标同理：退出播放层就停刷新（v2.8） */
+  /* 先撤透明类：把 WebView 变回不透明，列表才看得到（保帧画面就藏到后面去了） */
+  try{ document.documentElement.classList.remove("native-on"); document.body.classList.remove("native-on"); }catch(e){}
+  clearFrameOn();
+  var kept = false;
+  try{ if(window.NativeTV && NativeTV.nativeFreeze) kept = !!NativeTV.nativeFreeze(); }catch(e){}
+  NATIVE.frozen = kept;
+  if(kept){
+    __freezeT = setTimeout(function(){
+      /* 停在列表太久（3 分钟）→ 把保帧也收掉，别一直占着一张 Bitmap。
+         用 nativeStop 收尾：此时 ExoPlayer 已经是 null，只剩 detach/回收是有效的。 */
+      if(NATIVE.frozen && !$("player").classList.contains("show")){
+        try{ if(window.NativeTV && NativeTV.nativeStop) NativeTV.nativeStop(); }catch(e){}
+        NATIVE.frozen = false;
+      }
+    }, 180000);
+  }
+}
+
+/* ---------- 设备分级：决定软解缓冲策略 ---------- */
+/* 1080p@2.4Mbps FLV 软解对低端机压力大，按设备能力给不同参数 */
+var TIER = (function(){
+  try{
+    var mem = navigator.deviceMemory || 4;           /* GB，Chrome/WebView 支持 */
+    var hc  = navigator.hardwareConcurrency || 4;    /* 逻辑核数 */
+    var px  = Math.max(screen.width, screen.height);
+    /* 低端：小内存 或 少核 或 低分辨率屏 */
+    if(mem <= 2 || hc <= 4 || px <= 1280) return "low";
+    if(mem >= 6 && hc >= 8) return "high";
+    return "mid";
+  }catch(e){ return "mid"; }
+})();
+
+/* ---------- 播放档位：秒开 / 稳定 ----------
+   fast（默认）：原生起播门槛 700ms —— 开台体感最快；软解沿用设备分级原参数。
+   stable      ：原生起播门槛 1500ms + 更大缓冲；软解同步加倍 stash、放宽追帧阈值，
+                 弱网 / 移动网络下更不容易卡。
+   原生侧由 NativeTV.setTuneProfile 透传（Java 写进 SharedPreferences，重启仍生效）。 */
+var TUNE = "fast";
+try{ TUNE = localStorage.getItem("tv_tune") || "fast"; }catch(e){}
+function applyTuneToNative(){
+  try{ if(window.NativeTV && NativeTV.setTuneProfile) NativeTV.setTuneProfile(TUNE); }catch(e){}
+}
+function syncTuneUI(){
+  var b=$("btnTune"); if(!b) return;
+  var fast = (TUNE !== "stable");
+  b.querySelector(".ic").textContent = fast ? "⚡" : "🛡";
+  b.querySelector(".lb").textContent = fast ? "秒开" : "稳定";
+}
+function setTune(m){
+  TUNE = (m === "stable") ? "stable" : "fast";
+  try{ localStorage.setItem("tv_tune", TUNE); }catch(e){}
+  applyTuneToNative(); syncTuneUI();
+  toast(TUNE === "fast" ? "已切到「秒开」：起播更快、缓冲更浅"
+                        : "已切到「稳定」：缓冲更大、弱网更少卡顿", {type:"ok"});
+}
+
+/* 按设备分级生成软解基础配置 —— 核心是别让缓冲区无限堆积、别用 Worker 反拖主线程 */
+function baseMpegtsCfg(){
+  if(TIER === "low"){
+    /* 低端：关 Worker（避免线程切换开销与内存翻倍），延迟加载，浅缓冲，激进追帧 */
+    return {enableWorker:false,
+            lazyLoad:true, stashInitialSize:256,
+            liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:1.2,
+            liveBufferLatencyMinRemain:0.4,
+            autoCleanupSourceBuffer:true, autoCleanupMaxBackwardDuration:14,
+            autoCleanupMinBackwardDuration:8};
+  }
+  if(TIER === "high"){
+    /* 高端：Worker 解封装不卡 UI，中等缓冲换取顺滑 */
+    return {enableWorker:true,
+            lazyLoad:true, stashInitialSize:512,
+            liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:2.5,
+            liveBufferLatencyMinRemain:0.8,
+            autoCleanupSourceBuffer:true, autoCleanupMaxBackwardDuration:24,
+            autoCleanupMinBackwardDuration:12};
+  }
+  /* 中端：Worker + 适中缓冲 */
+  return {enableWorker:true,
+          lazyLoad:true, stashInitialSize:384,
+          liveBufferLatencyChasing:true, liveBufferLatencyMaxLatency:1.8,
+          liveBufferLatencyMinRemain:0.6,
+          autoCleanupSourceBuffer:true, autoCleanupMaxBackwardDuration:18,
+          autoCleanupMinBackwardDuration:10};
+}
+
+/* 在设备分级之上再叠一层「播放档位」：稳定档加倍缓冲、放宽追帧阈值 */
+function mpegtsCfg(){
+  var c = baseMpegtsCfg();
+  if(TUNE === "stable"){
+    c.stashInitialSize = (c.stashInitialSize || 384) * 2;
+    c.liveBufferLatencyMaxLatency = (c.liveBufferLatencyMaxLatency || 1.8) * 1.5;
+    c.liveBufferLatencyMinRemain  = (c.liveBufferLatencyMinRemain  || 0.6) * 1.5;
+  }
+  return c;
+}
+
+function playIdx(i){
+  /* ★ 会话闸门（兜底）：本函数是所有「点开频道 → 起播」异步链的汇聚点。
+     请求/测速在途时用户按 BACK 的话，回调仍可能排到这里 —— 一旦放行，
+     resumeWebMedia + 起播会在用户已经退回列表之后把声音拉起来。
+     各调用点（nextLine / playSoft / playWebLine / openChannel.then）都已经
+     各自查过闸门，这里是最后一道，防止以后新增异步调用点时漏掉。 */
+  if(__sessionClosed) return;
+  clearSniffCut();     /* ★ 换线路：撤掉上一条线路的「提取优选切换」延时器（v2.9） */
+  cur.idx=i; setLineUI();
+  var url=cur.urls[i]; if(!url) return;
+  /* 起播前恢复 WebView 媒体处理（closePlayer 时被 pauseWebMedia 暂停过） */
+  try{ if(window.NativeTV && NativeTV.resumeWebMedia) NativeTV.resumeWebMedia(); }catch(e){}
+  /* ★ 官网源的网页线路：不是流地址，交给原生 WebView 打开官方直播页自己播
+     （和 WebViewTV 同策略 —— CCTV 这类官网用 WASM+MSE，解出来的地址谁也用不了） */
+  if(cur.tid==="wvt" && !WVTCore.isDirect(url)){ playWebLine(url, i); return; }
+  /* ★ 起播看门狗（v2.6）：从这里起算，见 armStartWatch 的说明。
+     放在官网网页线路之后 —— 那条路走页面自己的看门狗，不重复布防。 */
+  armStartWatch();
+  /* ★ 优先原生硬解。原生已在播 → 只换源（nativeSwitch）；否则尝试起播。
+     两条路都失败才回落 mpegts 软解。
+     ★ NATIVE.deadIdx[i]：**这条线路**硬解已失败过 → 直接软解、不再试原生。
+     粒度是「线路」而不是「频道」（v2.7）：换到下一条线路时重新获得一次原生机会。
+     用频道级 dead 时，一条坏线路会把整个频道后续所有线路都拖成软解 ——
+     多线路频道上，用户会看到「明明别的线路硬解能播，却一直是软解」的莫名降级。 */
+  if(NATIVE.ok && !NATIVE.deadIdx[i]){
+    var ok = NATIVE.active ? nativeSwitch(url) : playNative(url);
+    if(ok){
+      /* 原生通道接管：把网页 <video> 彻底停掉，避免两路同时解码抢资源 */
+      try{ if(player){ player.destroy(); player=null; } }catch(e){}
+      var v0=$("v"); try{ v0.pause(); v0.removeAttribute("src"); v0.load(); }catch(e){}
+      return;
+    }
+  }
+  playSoft(i);
+}
+
+/* 官网源 · 网页线路：让原生开一个全屏 WebView 加载官方页面并注入取流脚本 */
+function playWebLine(url, i){
+  if(__sessionClosed) return;    /* 同 playSoft：挡住卸载后的延时重连 */
+  nativeStop();
+  if(player){ try{player.destroy();}catch(e){} player=null; }
+  var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  if(window.NativeTV && NativeTV.openPage){
+    var ad = WVTCore.matchAdapter(url, WVT.adapters) || WVTCore.defaultAdapter();
+    var extra = (cur.extra && cur.extra[i]) || "";
+    if(webState !== 2) webState = 1;         /* 2 = 正在自动切线路，保留原状态 */
+    window.__userExit = false;               /* ★ 新开一页：清掉上一轮的「用户退出」标志 */
+    $("webmask").classList.add("show");
+    $("webmaskTxt").textContent = "正在打开官方直播页…（第"+(i+1)+"条线路）";
+    try{ NativeTV.openPage(url, JSON.stringify(ad), extra); }
+    catch(e){
+      $("webmask").classList.remove("show");
+      setStatus(null);
+      showErrCard({ title:"无法打开官方页面", reason:String(e),
+        btns:[{label:"换一条线路", primary:true, fn:function(){ nextLine(); }},
+              {label:"换频道", fn:closePlayer}] });
+    }
+    return;
+  }
+  setStatus(null);
+  showErrCard({ title:"当前环境不支持官网页面播放", desc:"该线路需要在原生 WebView 里打开官方直播页",
+    btns:[{label:"换一条线路", primary:true, fn:function(){ nextLine(); }},
+          {label:"换频道", fn:closePlayer}] });
+}
+
+/* 原生页面层回调（由 MainActivity 调用）
+   webState: 0=空闲  1=网页线路播放中  2=正在自动切下一条线路  3=官网线路全部失败 */
+var webState = 0;
+
+/* ==================== 官网页流地址提取（v2.9） ====================
+   原生在官方页 WebView 上拦截到 *.m3u8 / *.mpd 后会后台探测「是否明文可播」，
+   结论通过 __onSniffResult 送到这里。两种用法：
+
+     · 优选（默认，仅限实测干净的白名单域名）：网页稳定起播 3s 后切到原生硬解。
+       官网页用 WASM+MSE 软解，盒子/低端机 CPU 吃满；原生硬解几乎不占 CPU。
+     · 兜底（始终启用）：这条网页线路起播失败时，若已有可播的提取地址就直接原生播
+       —— 不必再重载一遍官网页（桌面端要为这一步冷启动浏览器，30s+）。
+
+   ★ 为什么只对白名单域名做优选：央视系是 TS 载荷**私有加扰**（路径带 cdrm）——
+     探测会「通过」（无 EXT-X-KEY、分片首字节也是 0x47），但原生播出来全是花屏；
+     而花屏是**静默的**（播放器不报错也不报错码），没法自动回退。
+     白名单 = tools/_probe_wvt_hitrate.py 15 站抽样实测「嗅到就能干净播」的域名。
+     详见 官网源m3u8提取实测.md。
+   ★ 关闭：localStorage.setItem("tv_sniff","0") 后重启（或运行时 __sniffOff()）。 */
+var SNIFF = {
+  on: true,
+  last: null,      /* 最近一次提取结果 {ok,url,kind,reason,page,headers} */
+  cutT: null,      /* 优选切换的延时定时器 */
+  cutFor: ""       /* 已因提取切换过的流地址（同一条不重复切） */
+};
+try{ if(localStorage.getItem("tv_sniff") === "0") SNIFF.on = false; }catch(e){}
+window.__sniffOff = function(){ SNIFF.on = false; try{ localStorage.setItem("tv_sniff","0"); }catch(e){} return "off"; };
+window.__sniffOn  = function(){ SNIFF.on = true;  try{ localStorage.setItem("tv_sniff","1"); }catch(e){} return "on"; };
+
+/* 实测「嗅到就能干净可播」的域名（无 EXT-X-KEY、TS 分片干净、mpv 150 帧零解码错误） */
+var SNIFF_SAFE = ["m.gdtv.cn","itouchtv.cn","nmtv.cn","hntv.tv","sxrtv.com",
+                  "jlntv.cn","jstv.com","cztv.com","kankanews.com","mgtv.com",
+                  "guangdianyun.tv"];
+function sniffIsSafe(u){
+  u = String(u || "").toLowerCase();
+  for(var i=0;i<SNIFF_SAFE.length;i++){ if(u.indexOf(SNIFF_SAFE[i]) >= 0) return true; }
+  return false;
+}
+function clearSniffCut(){
+  if(typeof SNIFF === "undefined" || !SNIFF || !SNIFF.cutT) return;
+  clearTimeout(SNIFF.cutT); SNIFF.cutT = null;
+}
+
+/* 安排「优选切换」（幂等：可被 __onSniffResult / __onWebPageReady / __onWebPagePlaying
+   反复调用）。
+   ★ 为什么要三条路都调：m3u8 请求与「页面加载完成」的先后是不确定的 ——
+     有的站点边加载边拉流，提取结果会在 webState 还是 0 时到达；若只在
+     __onSniffResult 里判 webState===1，这条线路就永远等不到优选。 */
+function maybeArmSniffCut(){
+  if(!SNIFF.on) return;
+  var j = SNIFF.last;
+  if(!j || !j.ok || !j.url) return;
+  if(NATIVE.active || webState !== 1) return;
+  var mine = cur.urls && cur.urls[cur.idx];
+  if(j.page && mine && j.page !== mine) return;
+  if(SNIFF.cutFor === j.url) return;
+  if(!sniffIsSafe(j.url)) return;               /* 非白名单域只做兜底，不主动切 */
+  clearSniffCut();
+  SNIFF.cutT = setTimeout(function(){
+    SNIFF.cutT = null;
+    if(__sessionClosed || webState !== 1 || NATIVE.active) return;
+    if(!SNIFF.last || !SNIFF.last.ok) return;
+    var m2 = cur.urls && cur.urls[cur.idx];
+    if(SNIFF.last.page && m2 && SNIFF.last.page !== m2) return;
+    playSniffed();
+  }, 3000);
+}
+
+/* 原生提取结论回调（由 MainActivity.pushSniffResult 调用） */
+window.__onSniffResult = function(j){
+  if(!j || typeof j !== "object") return;
+  SNIFF.last = j;
+  if(!SNIFF.on || !j.ok || !j.url) return;      /* 判定不可播：保持网页播放，什么都不做 */
+  /* 只认「当前这条线路」的结果：换线后 page 对不上就作废 */
+  var mine = cur.urls && cur.urls[cur.idx];
+  if(j.page && mine && j.page !== mine) return;
+  maybeArmSniffCut();
+};
+
+/* 用提取到的地址起原生硬解（带 Referer/Cookie），并关掉官网页层。
+   ★ 走 nativePlayExt（全量重建播放器）——请求头是构建 DataSource 时设死的，
+     不能用 nativeSwitch（复用实例改不了头）。
+   ★ 起不来由 armStartWatch 看门狗兜底换线（原生首帧信号会撤它）。 */
+function playSniffed(){
+  var j = SNIFF.last;
+  if(!j || !j.ok || !j.url) return false;
+  if(__sessionClosed) return false;
+  if(!window.NativeTV || !NativeTV.nativePlayExt) return false;
+  SNIFF.cutFor = j.url;
+  clearSniffCut();
+  /* 关官网页层：hidePage 内部延迟 150ms 才拆 pageView —— 用 __sniffCut
+     告诉 __onWebPageClosed「这是切换，不是用户退出」，别把播放层收了。 */
+  window.__sniffCut = true;
+  try{ if(window.NativeTV && NativeTV.closePage) NativeTV.closePage(); }catch(e){}
+  setTimeout(function(){
+    window.__sniffCut = false;
+    if(__sessionClosed) return;
+    nativeStop();
+    if(player){ try{player.destroy();}catch(e){} player=null; }
+    var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+    armStartWatch();
+    if(playNative(j.url, j.headers || {})){
+      toast("官网线路已切原生硬解", {type:"info"});
+    }
+  }, 320);      /* > hidePage 的 150ms，等 pageView 真拆完再起原生 */
+  return true;
+}
+
+/* 调试用：tvlab 探针读提取状态 */
+window.__sniffState = function(){
+  return JSON.stringify({on:SNIFF.on, cutFor:SNIFF.cutFor, nativeActive:NATIVE.active,
+                         webState:webState, last:SNIFF.last});
+};
+
+window.__onWebPageClosed = function(){
+  $("webmask").classList.remove("show");
+  /* ★ 提取切换（v2.9）：关页面是「切原生」的内部动作，不是用户退出 —— 播放层要留着 */
+  if(window.__sniffCut){ window.__sniffCut = false; return; }
+  /* ★ v2.10.2：openChannel 里拆旧官方页（closePage）触发的关页回调 ——
+     换台内部动作，播放层要留着（否则本机源频道点下去 150ms 后被弹回旧列表） */
+  if(window.__pageSwap){ window.__pageSwap = false; return; }
+  /* ★ webState===2 是「正在自动切下一条官网线路」——此时关页面是内部动作，
+     不能顺手把播放层也收了（否则换线过程被自己打断）。
+     但用户主动按返回时（原生先置 __userExit=true）必须退到底：
+     实测 CCTV 这类多线路频道，前两条线路失败后 webState 停在 2，
+     用户按 BACK 只关掉官方页、播放层却留着，得再按一次 —— 那次就直接
+     退出 App 了，正是用户反馈的「再按返回直接退出软件」。 */
+  if(webState === 2 && !window.__userExit) return;
+  window.__userExit = false;
+  var allFailed = (webState === 3);
+  webState = 0;
+  /* ★ 官网线路全部失败：保留播放层，把「失败卡」摆给用户自己选下一步
+     （换线重试 / 回列表），比直接弹回列表 + 一句 toast 有用得多。 */
+  if(allFailed){ showWebDeadCard(); return; }
+  /* ★ 从官方页面退出来 → 回频道列表。
+     不能停在这里：本机播放器这会儿是没有源的，留在播放层只会看到一个
+     「大播放按钮」占位画面，用户以为死机了。 */
+  closePlayer();
+};
+/* 官网线路全挂的失败卡（被 __onWebPageClosed 与 __onWebPageFailed 共用） */
+function showWebDeadCard(){
+  setStatus(null);
+  var opts = {
+    title: "官网线路均不可用",
+    reason: window.__lastReason || "",
+    desc: "已尝试全部 " + cur.urls.length + " 条官网线路",
+    btns: [
+      { label:"重新尝试", primary:true, fn:function(){
+          delete LINE_CACHE[cur.tid+"/"+cur.id];
+          window.__lastReason = ""; cur.idx = 0; playIdx(0);
+      }},
+      { label:"换频道", fn:closePlayer }
+    ]
+  };
+  var hop = hopOpts();                                /* 同 nextLine：能跳下一个频道就跳 */
+  for(var k in hop){ if(hop.hasOwnProperty(k)) opts[k] = hop[k]; }
+  showErrCard(opts);
+}
+window.__onWebPageReady = function(){
+  /* ★ 文档加载完 ≠ 起播。官网页的播放器还要拉流、起 MSE，
+     这期间站点自己会画「加载中 / 大播放按钮 / 错误提示」一堆浮层。
+     所以遮罩先留着，等注入脚本报 playing 或 failed 再收 —— 否则用户会
+     看到站点的播放按钮，误以为我们的播放器坏了。 */
+  if(webState === 0) webState = 1;
+  if($("webmask").classList.contains("show")){
+    $("webmaskTxt").textContent = "正在起播…（第"+(cur.idx+1)+"条线路）";
+  }
+  maybeArmSniffCut();     /* v2.9：提取结果可能早于本回调到达，这里补一次布防 */
+};
+window.__onWebPagePlaying = function(){
+  webState = 1;
+  window.__lastReason = "";
+  markFirstFrame();                 /* 官网页起播也算出首帧：撤看门狗 + 清自动跳台计数 */
+  $("webmask").classList.remove("show");
+  hideErrCard();
+  $("status").style.display="none";
+  maybeArmSniffCut();     /* v2.9：真起播了，安排优选切换 */
+};
+/* 注入脚本判定这条线路起不来（站点提示了原因，或迟迟没有画面）：自动换下一条。
+   多数频道有多条官网线路（CCTV 一般是 官网页 / 央视频 / 央视新闻页 三条），
+   某条被「VIP 专享」「播出安排变更」之类的站点限制挡住时，换一条往往就能看。
+   reason 是站点提示文本，展示出来让用户知道为什么，而不是黑屏干等。 */
+window.__onWebPageFailed = function(reason){
+  var why = reason ? ("（"+reason+"）") : "";
+  window.__lastReason = reason || "";
+  /* ★ 提取兜底（v2.9）：官网页这条线路起不来，但原生已经嗅到并探测通过一条明文直链 ——
+     直接原生播，比「再开一遍官网页」快得多（桌面端这一步要冷启动浏览器 30s+）。
+     只在结果对得上「当前这条线路」时用，避免拿上一条线路的流去播。 */
+  if(SNIFF.on && SNIFF.last && SNIFF.last.ok && !NATIVE.active){
+    var m = cur.urls && cur.urls[cur.idx];
+    if(!SNIFF.last.page || !m || SNIFF.last.page === m){
+      if(playSniffed()){
+        toast("官网页起不来，改用提取到的直链" + why, {type:"warn"});
+        return;
+      }
+    }
+  }
+  if(cur.idx+1 < cur.urls.length){
+    webState = 2;
+    toast("第"+(cur.idx+1)+"条线路无法播放"+why+"，自动切换", {type:"warn"});
+    $("webmask").classList.add("show");
+    $("webmaskTxt").textContent = reason ? reason+"，换下一条…" : "正在尝试第"+(cur.idx+2)+"条线路…";
+    playIdx(cur.idx+1);            /* 复用同一个 WebView 换地址，不拆页面 */
+  } else {
+    webState = 3;
+    $("webmask").classList.remove("show");
+    try{ if(window.NativeTV && NativeTV.closePage) NativeTV.closePage(); }catch(e){}
+    /* closePage 正常会回调 __onWebPageClosed 去摆失败卡；万一没有页面可关
+       （例如 WebView 已经没了），兜个底，别让用户面对一片黑。 */
+    setTimeout(function(){ if(!$("errCard").classList.contains("show")) showWebDeadCard(); }, 420);
+  }
+};
+
+/* 软解兜底：mpegts.js（原 playIdx 的逻辑） */
+function playSoft(i){
+  /* ★ 会话已关闭（退出播放/切后台卸载）时挡住 —— 特别是 __onNativeState
+     ("error") 里那个 setTimeout(playSoft,200)：HOME 卸载后才到期的定时器
+     会在这里把软解重新拉起来，后台续响就是这么来的（实测真凶）。 */
+  if(__sessionClosed) return;
+  cur.idx=i; setLineUI();
+  var url=cur.urls[i]; if(!url) return;
+  nativeStop();
+  if(player){ try{player.destroy();}catch(e){} player=null; }
+  var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  /* ★ 低端机限制解码输出尺寸：1080p 源缩到屏幕尺寸渲染，显著降低 GPU/合成压力 */
+  try{
+    var PX = Math.max(screen.width, screen.height);
+    if(TIER === "low" && PX <= 1280){
+      v.setAttribute("width", Math.round(PX));
+      v.style.maxWidth = PX + "px";
+    } else {
+      v.removeAttribute("width"); v.style.maxWidth = "";
+    }
+  }catch(e){}
+  setStatus("连接线路"+(i+1)+"…", true);
+  if(!window.mpegts || !mpegts.getFeatureList().mseLivePlayback){
+    setStatus(null);
+    showErrCard({ title:"设备不支持软解播放", desc:"当前设备缺少 MSE 能力，无法播放 FLV 直播",
+      btns:[{label:"换频道", primary:true, fn:closePlayer}] });
+    return;
+  }
+  try{
+    player=mpegts.createPlayer({type:"flv", isLive:true, url:url, cors:true}, mpegtsCfg());
+  }catch(e){ nextLine(); return; }
+  v.onplaying=function(){ stall.n=0; stall.t=Date.now(); $("status").style.display="none"; markFirstFrame(); };
+  v.onended=function(){ nextLine(); };
+  v.onerror=function(){ nextLine(); };
+  bindStallWatch(v);
+  player.on(mpegts.Events.ERROR, function(){ nextLine(); });
+  player.attachMediaElement(v);
+  try{ player.load(); v.play(); }catch(e){ nextLine(); }
+}
+
+/* 播放中卡顿看护：统计 waiting 次数，短时间密集卡顿 → 判定线路不稳，自动切下一条 */
+var stall = {n:0, t:0, timer:null};
+function bindStallWatch(v){
+  stall.n=0; stall.t=Date.now();
+  v.onwaiting = function(){
+    stall.n++;
+    if(stall.n>=4 && Date.now()-stall.t < 5000){
+      toast("线路"+(cur.idx+1)+"卡顿，切换下一条", {type:"warn"});
+      clearTimeout(stall.timer);
+      stall.timer=setTimeout(function(){ nextLine(); }, 300);
+    }
+  };
+}
+/* ==================== 全源失败 → 自动换下一个频道（v2.6） ====================
+   借鉴 TVBoxOS `mConnectTimeoutChangeSourceRun` 的第三级：本频道的源全试完
+   → 取下一个频道继续播（LivePlayActivity.java:2351-2358）。
+
+   为什么：这是无广告直播 App，用户多半是拿遥控器在刷台 —— 对直播来说
+   「换台」常常比「重试同一个」更符合直觉（用户就是想看点什么）。所以失败卡
+   保留，但加一行「8 秒后自动换下一个频道」的倒计时，按钮随时能接管。
+
+   防雪崩：整源挂掉时（网络断、源站全灭）不能把列表从一个频道刷到另一个
+   一直刷穿 —— 连续自动跳台超过 MAX_AUTO_HOP 次仍没起来就停手，把失败卡
+   留给用户自己决定。计数在「出首帧」和「用户按返回」时清零。 */
+function nextChannelTarget(){
+  try{
+    var arr = (window.RENDER && RENDER.arr) || [];
+    for(var k=0;k<arr.length;k++){
+      var cid = arr[k].tid || curCat;
+      if(cid === cur.tid && arr[k].id === cur.id) return (k+1 < arr.length) ? arr[k+1] : null;
+    }
+  }catch(e){}
+  return null;   /* 不在当前列表里 / 已经是最后一个 */
+}
+function autoNextChannel(){
+  if(__autoHopN >= MAX_AUTO_HOP) return false;
+  var n = nextChannelTarget();
+  if(!n) return false;
+  __autoHopN++;
+  openChannel(n.tid || curCat, n.id, n.name);
+  return true;
+}
+/* 失败卡的自动跳台参数：没有下一个频道、或已经跳太多次 → 不显示倒计时 */
+function hopOpts(){
+  var n = (__autoHopN < MAX_AUTO_HOP) ? nextChannelTarget() : null;
+  return n ? { retrySec: 8, retryLabel: "自动换下一个频道", onRetry: autoNextChannel }
+           : {};
+}
+
+function nextLine(silent){
+  /* ★ 会话已关闭（退出播放/切后台卸载）时，mpegts 的 error/ended 回调
+     还可能排队触发到这里 —— 必须挡住，否则后台又把线路拉起来续响。 */
+  if(__sessionClosed) return;
+  var i = cur.idx;
+  if(i+1 < cur.urls.length){
+    /* silent：调用方（起播看门狗）已经报过原因了，别叠两条 toast */
+    if(!silent) toast("线路"+(i+1)+"失败，切换下一条", {type:"warn"});
+    playIdx(i+1);
+    return;
+  }
+  /* ★ 全部线路都试过了 → 给一张可操作的失败卡，而不是留一行冷文字。
+     用户此刻要的是「下一步怎么办」：重试 / 手动挑线路 / 换个频道。 */
+  setStatus(null);
+  var opts = {
+    title: cur.tid==="wvt" ? "官网线路均不可用" : "该频道暂时无法播放",
+    reason: window.__lastReason || "",
+    desc: "已尝试全部 " + cur.urls.length + " 条线路",
+    btns: [
+      { label:"重试", primary:true, fn:function(){
+          delete LINE_CACHE[cur.tid+"/"+cur.id];      /* 清掉选路缓存，重新测速 */
+          window.__lastReason = "";
+          playIdx(0);
+      }},
+      { label:"手动选线路", fn:openLinePanel },
+      { label:"换频道", fn:closePlayer }
+    ]
+  };
+  var hop = hopOpts();                                /* 有下一个频道就给 8s 自动跳台倒计时 */
+  for(var k in hop){ if(hop.hasOwnProperty(k)) opts[k] = hop[k]; }
+  showErrCard(opts);
+}
+function closePlayer(){
+  __sessionClosed = true;       /* ★ 挡住卸载引发的自动重连（同 __appPause） */
+  clearTimeout(stall.timer);
+  clearStartWatch();            /* ★ 起播看门狗：退出播放层就不该再计时换线 */
+  clearSniffCut();              /* ★ 提取优选切换的延时器（v2.9） */
+  stopStatWatch();              /* ★ 播放信息角标：退出播放层停止刷新（v2.8） */
+  __autoHopN = 0;               /* 自动跳台计数复位（下次开台重新开始数） */
+  if(player){ try{player.destroy();}catch(e){} player=null; }
+  /* ★ 保帧版释放：不摘画面层，最后一帧留在 TextureView 上给下次开台用 */
+  var kept = nativeFreeze();
+  /* ★ 真正退出播放层：强制停 WebView 内部媒体。实测（Chromium 91）
+     v.pause()+load() 之后 OpenSL ES 播放器仍出声（audio_flinger active
+     不归零），只有 web.onPause() 能真正停。恢复由下次 playIdx 起播时
+     resumeWebMedia() 触发。切线路/换台不走这里（nativeStop），不影响拉流。
+     ★ 停的时机（v2.5.1 新增）：web.onPause() 连「渲染」一起停，
+     而 WebView 背景是透明的 —— 如果刚撤掉 native-on 就立刻停渲染，
+     屏幕上留下的就是下层保帧画面，「返回后还看到视频」的旧 bug 会复活。
+     所以保帧成功时必须等浏览器把不透明的列表真正画上屏（两帧）再停。 */
+  var stopWebMedia = function(){
+    __mediaPauseGuardUntil = Date.now() + 4000;   /* ★ 见 visibilitychange 处的闸门说明 */
+    try{ if(window.NativeTV && NativeTV.pauseWebMedia) NativeTV.pauseWebMedia(); }catch(e){}
+  };
+  if(kept){
+    requestAnimationFrame(function(){ requestAnimationFrame(stopWebMedia); });
+  } else {
+    stopWebMedia();
+  }
+  /* ★ 400ms 后把渲染恢复回来：媒体此刻已彻底清空（nativeFreeze + 下面
+     v.pause/load），恢复渲染不会复活声音，但能让列表动画/滚动恢复正常。 */
+  setTimeout(function(){
+    try{ if(window.NativeTV && NativeTV.resumeWebMedia) NativeTV.resumeWebMedia(); }catch(e){}
+    try{ window.dispatchEvent(new Event("resize")); }catch(e){}
+  }, 400);
+  webState = 0;
+  window.__lastReason = "";
+  hideErrCard();
+  try{ if(window.NativeTV && NativeTV.closePage) NativeTV.closePage(); }catch(e){}
+  $("webmask").classList.remove("show");
+  var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  /* ★ v2.10.6：旧列表页已删除 —— 「退出播放」没有列表可回，播放层保留
+     （保帧画面垫底），直接唤出频道列表浮层让用户换台；退出 App 走 BACK 确认卡 */
+  $("player").classList.remove("fs");
+  closeLinePanel();
+  $("epg").classList.remove("show");
+  openChOv();
+}
+function toggleFs(){
+  var v=$("v");
+  /* 优先走原生横屏（安卓手机竖屏时 WebView 全屏 API 不会旋转屏幕，视频仍很小）。
+     原生桥由 MainActivity 注入，window.NativeTV.setLandscape(true) 会
+     真正 setRequestedOrientation(SENSOR_LANDSCAPE) 并隐藏系统栏。 */
+  if(window.NativeTV && NativeTV.setLandscape){
+    var toFs = !isFsMode();
+    setFsMode(toFs);
+    return;
+  }
+  /* 桌面 / 其它环境：走标准全屏 API */
+  if(document.fullscreenElement||document.webkitFullscreenElement){ (document.exitFullscreen||document.webkitExitFullscreen).call(document); }
+  else { (v.requestFullscreen||v.webkitRequestFullscreen||v.webkitEnterFullscreen).call(v); }
+}
+
+/* ---------- 全屏状态管理（原生 + 网页双通道） ----------
+   竖屏手机点全屏 → 原生旋转成横屏 + 视频铺满整屏；
+   再点一次 → 转回竖屏 + 恢复「上视频下控制条」布局。 */
+function isFsMode(){ return $("player").classList.contains("fs"); }
+
+function setFsMode(on){
+  var p=$("player"), btn=$("btnFs");
+  if(on){
+    p.classList.add("fs");
+    if(btn){ btn.querySelector(".ic").textContent="⛶"; btn.querySelector(".lb").textContent="退出全屏"; }
+    try{ if(window.NativeTV && NativeTV.setLandscape) NativeTV.setLandscape(true); }catch(e){}
+    /* 部分设备原生旋转有延迟，兜底再触发一次 resize 让视频重排 */
+    setTimeout(function(){ try{ window.dispatchEvent(new Event("resize")); }catch(e){} }, 260);
+  }else{
+    p.classList.remove("fs");
+    if(btn){ btn.querySelector(".ic").textContent="⛶"; btn.querySelector(".lb").textContent="全屏"; }
+    try{ if(window.NativeTV && NativeTV.setLandscape) NativeTV.setLandscape(false); }catch(e){}
+    setTimeout(function(){ try{ window.dispatchEvent(new Event("resize")); }catch(e){} }, 260);
+  }
+  hideCtrlLater();
+}
+function resetCtrlTimer(){
+  clearTimeout(ctrlTimer);
+  ctrlTimer=setTimeout(function(){
+    var p=$("player");
+    if(p.classList.contains("show") && !$("epg").classList.contains("show") && !$("linePanel").classList.contains("show")){
+      $("ctrl").classList.add("hide");
+      if($("ctrl").contains(document.activeElement)){ try{ $("v").focus(); }catch(e){} }
+    }
+  }, 6000);
+}
+/* 点一下屏幕唤出控制条，6 秒无操作自动隐藏 */
+function hideCtrlLater(){
+  $("ctrl").classList.remove("hide");
+  resetCtrlTimer();
+}
+
+/* ---------- 触屏手势（手机，电视家风格）----------
+   · 单击屏幕：唤出/收起控制条（★ 绑定在 #player 整层，原生模式下 #vwrap 隐藏也能响应）
+   · 双击屏幕：进/出全屏
+   · 左半边上下滑：调亮度；右半边上下滑：调音量（带手势指示）
+   判定：click 的坐标与 target 都可靠（touch 的 clientX 在 WebView 常为 NaN）。 */
+var touchState = { x:0, y:0, mode:null, timer:null, lastTap:0, lastPointer:0, moved:false,
+                   lp:false, lpT:null, lpUsed:false };   /* lp=长按已确认 lpUsed=长按滑动已消费(v2.10) */
+function bindTouchGestures(){
+  var wrap=$("player");
+  function inCtrl(t){ return t && t.closest && (t.closest("#ctrl")||t.closest(".ctlbtn")||t.closest(".line-item")); }
+  function inOv(t){ return t && t.closest && (t.closest(".ov")); }
+
+  /* 单击 / 双击判定（click + pointerup 兜底） */
+  function onTap(e){
+    if(inCtrl(e.target)) return;
+    /* v2.10：浮层开着时不在这里处理 —— 点击交给 .ov 自己的 click listener
+       （频道项 onclick 换台 / 空白处关闭）。★ 不能在这里 closeAllOv：
+       pointerup 先把浮层 display:none 的话，后续 click 落不到频道项上，
+       「点浮层里的频道换台」就整个失灵（实测踩到）。 */
+    if(anyOvOpen()) return;
+    if(inOv(e.target)) return;
+    /* v2.10：长按滑动唤出过浮层的手势，收手时不当作单击 */
+    if(touchState.lpUsed || touchState.lp){ touchState.lp=false; touchState.lpUsed=false; return; }
+    var now=Date.now();
+    if(now-touchState.lastTap < 320){          /* 双击 → 全屏 */
+      clearTimeout(touchState.timer); touchState.lastTap=0;
+      toggleFs();
+    }else{
+      touchState.lastTap=now;
+      clearTimeout(touchState.timer);
+      touchState.timer=setTimeout(function(){    /* 单击 → 切换控制条 */
+        if($("linePanel").classList.contains("show") || $("epg").classList.contains("show")){
+          closeLinePanel(); $("epg").classList.remove("show");
+        } else {
+          var c=$("ctrl");
+          if(c.classList.contains("hide")) hideCtrlLater(); else c.classList.add("hide");
+        }
+      }, 320);
+    }
+  }
+  wrap.addEventListener("pointerup", function(e){
+    touchState.lastPointer = Date.now();
+    onTap(e);
+  });
+  wrap.addEventListener("click", function(e){
+    if(Date.now() - touchState.lastPointer < 350) return;   /* pointerup 已处理 */
+    onTap(e);
+  });
+
+  /* 亮度/音量手势：触摸移动跟踪 */
+  wrap.addEventListener("touchstart", function(e){
+    if(e.touches.length!==1) return;
+    if(inCtrl(e.target)) return;
+    if(anyOvOpen()) return;                       /* 浮层开着：里面的滚动交给自己 */
+    touchState.x=e.touches[0].clientX; touchState.y=e.touches[0].clientY;
+    touchState.mode=null; touchState.moved=false;
+    touchState.lp=false; touchState.lpUsed=false;
+    touchState.startX=touchState.x; touchState.startY=touchState.y;
+    /* v2.10 长按判定：按住 450ms 不动 → 进入「长按待滑」状态，
+       之后水平滑 >40px 往右开频道列表 / 往左开设置 */
+    clearTimeout(touchState.lpT);
+    var sx=touchState.startX, sy=touchState.startY;
+    touchState.lpT=setTimeout(function(){
+      if(touchState.mode) return;                 /* 已进入亮度/音量手势 */
+      touchState.lp=true;
+      showGestureInd("📡", "← 列表 · 设置 →", 0.5);   /* 轻提示（700ms 自隐） */
+    }, 450);
+  });
+  wrap.addEventListener("touchmove", function(e){
+    if(e.touches.length!==1 || !touchState.startX) return;
+    var x=e.touches[0].clientX, y=e.touches[0].clientY;
+    var dx=x-touchState.startX, dy=y-touchState.startY;
+    /* v2.10：长按确认后水平滑 → 唤出浮层（先于亮度/音量手势判定） */
+    if(touchState.lp && !touchState.lpUsed){
+      if(Math.abs(dx) > 40){
+        touchState.lpUsed=true; clearTimeout(touchState.lpT); hideGestureInd();
+        if(dx>0){ openChOv(); } else { openSetOv(); }
+        e.preventDefault(); return;
+      }
+      /* 长按后竖向滑走了 → 取消长按，仍可走亮度/音量 */
+      if(Math.abs(dy) > 40){ touchState.lp=false; clearTimeout(touchState.lpT); hideGestureInd(); }
+      e.preventDefault(); return;
+    }
+    if(Math.abs(dy) < 14 && Math.abs(dx) < 14) return;
+    if(!touchState.mode){
+      /* 只认竖向滑（亮度/音量）。横向滑动保留给长按浮层手势 ——
+         旧代码这里有个 mode="seek" 分支，但后面从没有处理它的代码，
+         是死代码，还只在长按手势起手阶段帮倒忙（v2.10 删除）。 */
+      if(Math.abs(dy) > Math.abs(dx)){
+        touchState.mode = (touchState.startX < window.innerWidth/2) ? "bright" : "vol";
+      }
+    }
+    touchState.moved = true;
+    if(touchState.mode==="bright") adjustBrightness(-dy/200);
+    else if(touchState.mode==="vol") adjustVolume(-dy/200);
+    e.preventDefault();
+  });
+  wrap.addEventListener("touchend", function(){
+    clearTimeout(touchState.lpT);
+    if(touchState.lp && !touchState.lpUsed) hideGestureInd();   /* 长按但没滑走 */
+    if(touchState.mode || touchState.lp) hideGestureInd();
+    touchState.mode=null; touchState.lp=false; touchState.startX=0;
+  });
+}
+
+/* 亮度/音量手势：调系统亮度（需原生桥）或音量 */
+var brightLevel = 0.5, volLevel = 0.5;
+function adjustBrightness(delta){
+  brightLevel = Math.max(0.05, Math.min(1, brightLevel + delta));
+  try{ if(window.NativeTV && NativeTV.setBrightness) NativeTV.setBrightness(brightLevel); }catch(e){}
+  showGestureInd("🔆", Math.round(brightLevel*100)+"%", brightLevel);
+}
+function adjustVolume(delta){
+  volLevel = Math.max(0, Math.min(1, volLevel + delta));
+  try{ if(window.NativeTV && NativeTV.setVolume) NativeTV.setVolume(volLevel); }catch(e){}
+  showGestureInd("🔊", Math.round(volLevel*100)+"%", volLevel);
+}
+function showGestureInd(icon, val, frac){
+  $("gIcon").textContent=icon; $("gVal").textContent=val;
+  $("gBar").style.width=Math.round(frac*100)+"%";
+  $("gestureInd").classList.add("show");
+  clearTimeout(touchState.gTimer);
+  touchState.gTimer=setTimeout(hideGestureInd, 700);
+}
+function hideGestureInd(){ $("gestureInd").classList.remove("show"); }
+
+/* ---------- 列表渲染 ----------
+   ★ 分块渲染：官网源一个分组可以有几百个频道（全源 904 个），一次性建 DOM
+     在手机端有明显卡顿与内存占用。策略 = 首屏先出几十条，滚动/焦点接近末尾
+     再追加下一块；首 10 条做 stagger 入场，其余不做（全做反而卡）。 */
+var RENDER = { arr:[], n:0, chunk:48, io:null };
+
+/* ★ v2.10.6：旧列表页渲染代码（skeleton/renderChannels/appendChunk/observeMore/
+   ensureRenderedFor）随 DOM 一起删除。RENDER 数组保留 —— 自动跳台（nextChannelTarget）
+   与遥控器切台仍然需要「当前频道列表」这一数据；由 loadCat / pickGroup /
+   renderChOvChs 负责填充。 */
+
+/* 本机源分类（含收藏）。官网源不走这里，见 setSrc → loadWvt */
+function loadCat(tid){
+  /* v2.10.6：只维护数据（allChans / RENDER.arr），渲染交给 chOv 浮层 */
+  curCat=tid;
+  if(tid==="fav"){ allChans=favArr().slice(); RENDER.arr=allChans; return; }
+  C.fetchChannels(tid).then(function(arr){
+    allChans=arr||[];
+    if(srcMode!=="wvt" && curCat===tid) RENDER.arr=allChans;
+  }).catch(function(){});
+}
+
+/* ---------- 官网源：加载 / 分组 / 渲染 ---------- */
+function applyWvt(res){
+  var chans=res.channels||[];
+  if(!chans.length) throw new Error("无频道数据");
+  WVT.chans=chans; WVT.adapters=res.adapters||[];
+  /* 央视频付费频道标记（限免/VIP）：快照里 pid->tag 的静态表，纯字典查询零开销 */
+  var TAGS=(window.WVT_SNAPSHOT && window.WVT_SNAPSHOT.tags)||{};
+  var groups=[], byId={}, byGroup={}, flat=[], i;
+  for(i=0;i<chans.length;i++){
+    var c=chans[i], key=c.name, k=1;
+    while(byId[key]){ k++; key=c.name+"#"+k; }        /* 同名频道加后缀区分 */
+    var tag="";
+    if(c.tag==="vip"||c.tag==="mianfei"){ tag=c.tag; }
+    else{
+      var us=c.urls||[];
+      for(var j=0;j<us.length;j++){
+        var mu=/yangshipin\.cn\/tv\/home\?pid=(\d+)/.exec((us[j]&&us[j].url)||"");
+        if(mu&&TAGS[mu[1]]){ tag=TAGS[mu[1]]; break; }
+      }
+    }
+    byId[key]={ id:key, name:c.name, group:c.group, urls:c.urls||[], tag:tag };
+    flat.push({ id:key, name:c.name, group:c.group, tid:"wvt", tag:tag });
+    if(groups.indexOf(c.group)<0){ groups.push(c.group); byGroup[c.group]=[]; }
+    byGroup[c.group].push(key);
+  }
+  WVT.byId=byId; WVT.byGroup=byGroup; WVT.groups=groups; WVT.list=flat; WVT.ready=true;
+  if(groups.indexOf(WVT.cur)<0) WVT.cur = (groups.indexOf("央视")>=0) ? "央视" : groups[0];
+  pickGroup(WVT.cur);
+  return chans.length;
+}
+
+function loadWvt(){
+  if(WVT.ready){ pickGroup(WVT.cur); return; }
+  if(WVT.loading) return;
+  WVT.loading=true;
+  WVTCore.load({refresh:true}).then(function(res){
+    var n=applyWvt(res);
+    WVT.loading=false;
+    console.log("[WVT] "+n+" 个频道 / "+WVT.groups.length+" 个分组，来源="+res.from);
+    autoStartFirst();       /* ★ v2.10：频道表就绪 → 自动起播上次/第一个频道 */
+    /* 用的是缓存/内置快照 -> 后台静默拉一次最新的，变了就刷新列表 */
+    if(res.from!=="network"){
+      WVTCore.refresh().then(function(r2){
+        if(!r2 || !r2.channels) return;
+        if(r2.channels.length!==WVT.chans.length){
+          toast("官网源已更新");
+          applyWvt(r2);
+        }
+      }).catch(function(e){ console.log("[WVT] 后台刷新失败: "+e); });
+    }
+  }).catch(function(e){
+    WVT.loading=false;
+    toast("官网源加载失败："+e, {type:"warn"});
+  });
+}
+
+function pickGroup(g){
+  WVT.cur=g; curCat="wvt";
+  var ids=(WVT.byGroup && WVT.byGroup[g]) || [];
+  allChans=ids.map(function(id){ return { id:id, name:WVT.byId[id].name, tid:"wvt" }; });
+  RENDER.arr=allChans;
+}
+
+/* ==========================================================================
+ * v2.10 半透明浮层：频道列表 / 设置（WebView电视风格）
+ *   打开 App → 自动起播上次/第一个频道，全程全屏播放为主界面。
+ *   长按屏幕中间往右滑 = 频道列表浮层；往左滑 = 设置浮层。
+ *   浮层只是「盖」在画面上（z-index 高于 #ctrl），播放不中断；
+ *   BACK 优先关浮层（MainActivity 注入 JS 先问 __overlayBack）。
+ * ========================================================================*/
+function ovOpen(which){
+  return which==="ch" ? $("chOv").classList.contains("show")
+                      : $("setOv").classList.contains("show");
+}
+function anyOvOpen(){ return ovOpen("ch") || ovOpen("set"); }
+function closeChOv(){ $("chOv").classList.remove("show"); }
+function closeSetOv(){ $("setOv").classList.remove("show"); }
+function closeAllOv(){
+  var was = anyOvOpen();
+  clearTimeout(__ovAutoT); __ovAutoT=null;
+  closeChOv(); closeSetOv();
+  /* 官网页层（pageView）为浮层让位时被藏了 -> 关浮层恢复它 */
+  if(was){ try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(false); }catch(e){} }
+}
+/* 借鉴 WebTvLive：浮层 12 秒无操作自动关闭（播放不中断，随时可再唤出） */
+var __ovAutoT=null;
+function ovAutoKeep(){
+  clearTimeout(__ovAutoT);
+  if(anyOvOpen()) __ovAutoT=setTimeout(closeAllOv, 12000);
+}
+
+/* BACK 优先级（由 MainActivity 的注入 JS 调用）：返回 '1' 表示已消费 */
+window.__overlayBack = function(){
+  if(anyOvOpen()){ closeAllOv(); return "1"; }
+  return "0";
+};
+
+/* 浮层空白处点击 = 关闭（频道项/设置项的 onclick 在 target 阶段先执行，
+   冒泡到这里时已处理完，重复 closeAllOv 无害）。
+   __ovGuardUntil：原生长按手势唤出浮层后的防误触窗 —— 同一手势抬起产生的
+   click 落在浮层空白处，不设窗的话浮层刚打开就被这个 click 关掉（实测踩到）。 */
+function ovClickClose(e){
+  if(Date.now() < (window.__ovGuardUntil||0)) return;
+  if(e.target.closest && (e.target.closest(".chi") || e.target.closest(".cat") || e.target.closest(".opt") || e.target.closest(".sec") || e.target.closest(".sopt"))) return;
+  closeAllOv();
+}
+try{ $("chOv").addEventListener("click", ovClickClose); $("setOv").addEventListener("click", ovClickClose); }catch(e){}
+
+/* TV：BACK = 确认退出卡（用户定稿）。由 MainActivity doBack 的 TV 分支调用，
+   返回 '1' 表示已消费（浮层关闭 / 确认卡已弹）。 */
+window.__tvBack = function(){
+  if(anyOvOpen()){ closeAllOv(); return "1"; }
+  if($("player").classList.contains("show")){
+    /* ★ 确认卡画在主 WebView 里，官方页 pageView 盖在上面会把它挡住 ——
+       弹卡前先藏官方页，「继续观看」时恢复（实测踩到：卡弹了但看不见）。 */
+    try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(true); }catch(e){}
+    showErrCard({ title:"确定退出纯净电视？", desc:"退出后将停止播放",
+      btns:[{label:"退 出", primary:true, fn:function(){ try{ NativeTV.exitApp(); }catch(e){} }},
+            {label:"继续观看", fn:function(){ try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(false); }catch(e){} }}] });
+    return "1";
+  }
+  return "0";
+};
+
+/* ---------- 频道列表浮层：左分组 + 右编号频道，当前频道橙色高亮 ---------- */
+var CHOV = { group:"", src:"" };   /* 浮层自己的分组视图（不动底层列表状态） */
+function chOvGroups(){
+  /* 返回 [源, 分组key, 显示名] 三元组（本机分类的 key 是 tid，显示名要查 CATS） */
+  if(srcMode==="wvt" && WVT.ready && WVT.groups.length) return WVT.groups.map(function(g){ return ["wvt", g, g]; });
+  var a=[["local","fav","⭐ 收藏"]]; CATS.forEach(function(c){ a.push(["local", c[0], c[1]]); });
+  return a;
+}
+function chOvChans(src, key){  if(src==="wvt"){
+    var ids=(WVT.byGroup && WVT.byGroup[key]) || [];
+    return ids.map(function(id,i){ return { tid:"wvt", id:id, name:WVT.byId[id].name, no:i+1 }; });
+  }
+  if(key==="fav"){
+    return favArr().map(function(f,i){ return { tid:f.tid, id:f.id, name:f.name, no:i+1 }; });
+  }
+  /* 本机分类：用已缓存的 allChans（当前分类一致时零开销），否则现拉 */
+  if(curCat===key && allChans.length){
+    return allChans.map(function(c,i){ return { tid:key, id:c.id, name:c.name, no:i+1 }; });
+  }
+  return null;   /* 交给异步 fetchChannels 回填 */
+}
+function renderChOvCats(){
+  var w=$("chOvCats"); w.innerHTML="";
+  chOvGroups().forEach(function(g){
+    var on = (g[0]===CHOV.src && g[1]===CHOV.group);
+    var d=document.createElement("div");
+    d.className="cat"+(on?" on":"");
+    d.textContent=g[2];
+    d.tabIndex=0;
+    d.onclick=function(){ CHOV.src=g[0]; CHOV.group=g[1]; renderChOvCats(); renderChOvChs(); ovAutoKeep(); };
+    w.appendChild(d);
+  });
+}
+function renderChOvChs(asyncArr){
+  var w=$("chOvChs"); w.innerHTML="";
+  var arr = asyncArr || chOvChans(CHOV.src, CHOV.group);
+  if(!arr){
+    w.innerHTML='<div class="chi"><span class="nm" style="color:var(--fg-mute)">加载中…</span></div>';
+    if(srcMode!=="wvt"){
+      C.fetchChannels(CHOV.group).then(function(res){
+        if(!ovOpen("ch") || CHOV.src!=="local" || CHOV.group!==curCat) return;
+        allChans=res||[]; renderChOvChs();
+      }).catch(function(){ var b=$("chOvChs"); if(b) b.innerHTML=""; });
+    }
+    return;
+  }
+  arr.forEach(function(c){
+    var on = (c.tid===cur.tid && String(c.id)===String(cur.id));
+    var d=document.createElement("div");
+    d.className="chi"+(on?" on":"");
+    d.innerHTML='<span class="no"></span><span class="nm"></span>';
+    d.tabIndex=0;
+    d.dataset.cid=c.id; d.dataset.tid=c.tid;    /* 遥控器数字选台定位用 */
+    d.querySelector(".no").textContent=String(c.no||"");
+    d.querySelector(".nm").textContent=c.name;
+    d.onclick=function(){ closeAllOv(); openChannel(c.tid, c.id, c.name); };
+    w.appendChild(d);
+  });
+  RENDER.arr=arr;    /* 供 nextChannelTarget（自动跳台）与遥控器切台使用 */
+  /* 当前频道滚进可视区并聚焦（TV 遥控器直接从这里开始按上下键） */
+  var curEl=w.querySelector(".chi.on") || w.querySelector(".chi");
+  if(curEl){
+    if(IS_TV){ try{ curEl.focus(); }catch(e){} }
+    if(curEl.scrollIntoView) try{ curEl.scrollIntoView({block:"center"}); }catch(e){ curEl.scrollIntoView(); }
+  }
+}
+/* 浮层顶部源选择：官网源 / 本机源（旧列表页退役后的唯一源入口）。
+   setSrc 同步全局状态（旧列表页在底层隐藏着，重建无感）；分组与频道列随之切换。 */
+function renderChOvSrc(){
+  var w=$("chOvSrc"); w.innerHTML="";
+  SRC_TABS.forEach(function(t){
+    var d=document.createElement("div");
+    d.className="sopt"+(CHOV.src===t[0]?" on":"");
+    d.textContent=t[1]; d.tabIndex=0;
+    d.onclick=function(){
+      if(CHOV.src===t[0]) return;
+      CHOV.src=t[0];
+      CHOV.group = (t[0]==="wvt") ? (WVT.cur||"央视") : (curCat==="fav"?"tv":curCat);
+      try{ setSrc(t[0]); }catch(e){}
+      renderChOvSrc(); renderChOvCats(); renderChOvChs();
+    };
+    w.appendChild(d);
+  });
+}
+function openChOv(){
+  if(ovOpen("ch")) return;                /* 已开着（原生手势会重复触发） */
+  CHOV.src = (srcMode==="wvt" && WVT.ready) ? "wvt" : "local";
+  CHOV.group = (CHOV.src==="wvt") ? WVT.cur : curCat;
+  closeSetOv();
+  $("chOv").classList.add("show");
+  /* 官网页盖在浮层上面：临时藏掉（只停绘制，页面媒体继续跑） */
+  try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(true); }catch(e){}
+  renderChOvSrc(); renderChOvCats(); renderChOvChs();
+  ovAutoKeep();
+}
+
+/* ---------- 设置浮层：右侧面板（源/比例/信息/时钟/网速） ---------- */
+function openSetOv(){
+  if(ovOpen("set")) return;
+  closeChOv();
+  renderSetPanel();
+  $("setOv").classList.add("show");
+  try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(true); }catch(e){}
+  ovAutoKeep();
+}
+function renderSetPanel(){
+  var p=$("setPanel"); p.innerHTML="";
+  function sec(title){
+    var s=document.createElement("div"); s.className="sec";
+    var t=document.createElement("div"); t.className="t"; t.textContent=title;
+    var o=document.createElement("div"); o.className="opts";
+    s.appendChild(t); s.appendChild(o); p.appendChild(s); return o;
+  }
+  function opt(box, label, on, fn){
+    var d=document.createElement("div"); d.className="opt"+(on?" on":"");
+    d.textContent=label; d.tabIndex=0; d.onclick=function(){ fn(); renderSetPanel(); };
+    box.appendChild(d); return d;
+  }
+  /* 视频源 */
+  var srcBox=sec("视频源");
+  SRC_TABS.forEach(function(t){
+    opt(srcBox, t[1], srcMode===t[0], function(){
+      if(srcMode!==t[0]){ closeAllOv(); setSrc(t[0]); }
+    });
+  });
+  /* 画面比例（与 btnRatio 同一套 contain/cover/fill） */
+  var ratios=[["contain","适应"],["cover","铺满"],["fill","拉伸"]];
+  var ri=($("v").dataset.ri|0);
+  var rBox=sec("画面比例");
+  ratios.forEach(function(r,i){
+    opt(rBox, r[1], i===ri, function(){
+      $("v").dataset.ri=i; $("v").style.objectFit=r[0]; toast("画面比例："+r[1]);
+    });
+  });
+  /* 播放信息：分辨率/码率（读 v2.8 的统计缓存，不额外打扰播放器） */
+  var infoBox=sec("播放信息");
+  var st = NATIVE.lastStats || {};
+  var resTxt = (st.width && st.height) ? (st.width+"x"+st.height)
+             : (($("v").videoWidth && $("v").videoHeight) ? $("v").videoWidth+"x"+$("v").videoHeight : "—");
+  var brTxt = st.bandwidth ? Math.round(st.bandwidth/1000)+" kbps" : "—";
+  var d1=document.createElement("div"); d1.className="opt"; d1.style.cursor="default";
+  d1.textContent="尺寸 "+resTxt; infoBox.appendChild(d1);
+  var d2=document.createElement("div"); d2.className="opt"; d2.style.cursor="default";
+  d2.textContent="码率 "+brTxt; infoBox.appendChild(d2);
+  /* 底部：图标 + 时钟(秒级) + 网速（码率折算） */
+  var foot=document.createElement("div"); foot.className="foot";
+  var netBps = (st.bandwidth ? st.bandwidth/8 : 0);   /* bit/s */
+  var netTxt = netBps>0 ? (netBps>1048576 ? (netBps/1048576).toFixed(1)+" MB/s"
+                            : Math.round(netBps/1024)+" KB/s") : "—";
+  foot.innerHTML='<span class="ic">🌐</span><span class="net"></span>'+
+                 '<span class="ic">⚙️</span><span class="res"></span>'+
+                 '<span class="ic">🕐</span><span class="clk"></span>';
+  foot.querySelector(".net").textContent=netTxt;
+  foot.querySelector(".res").textContent=resTxt;
+  var clkEl=foot.querySelector(".clk");
+  function tick(){ var d=new Date(); clkEl.textContent=("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)+":"+("0"+d.getSeconds()).slice(-2); }
+  tick();
+  clearInterval(renderSetPanel._t);
+  renderSetPanel._t=setInterval(function(){ if(!ovOpen("set")){ clearInterval(renderSetPanel._t); return; } tick(); }, 1000);
+  p.appendChild(foot);
+  if(IS_TV){ var f0=p.querySelector(".opt"); if(f0){ try{ f0.focus(); }catch(e){} } }
+}
+
+/* ---------- 启动自动起播（v2.10）----------
+   官网源快照就绪后：优先恢复上次频道（localStorage），否则当前分组第一个。
+   只自动起播一次（__autoStarted 挡住后台静默刷新的 applyWvt 二次触发）。 */
+var __autoStarted = false;
+function autoStartFirst(){
+  if(__autoStarted || !WVT.ready) return;
+  __autoStarted = true;
+  var last=null;
+  try{ last=JSON.parse(localStorage.getItem("tv_last_ch")||"null"); }catch(e){}
+  var id = (last && last.id && WVT.byId[last.id]) ? last.id : (WVT.byGroup[WVT.cur]||[])[0];
+  if(id){
+    var ch=WVT.byId[id];
+    console.log("[AUTO] 自动起播: "+ch.name);
+    openChannel("wvt", ch.id, ch.name);
+  }
+}
+
+/* ---------- 初始化 ---------- */
+function init(){
+  if(IS_TV) document.body.classList.add("tv");
+  /* v2.10.6：旧列表页删除 —— 启动即全屏播放；源切换/换台全在 chOv 浮层 */
+  $("btnFs").onclick=toggleFs;
+  $("btnEpg").onclick=function(){
+    var b=$("epg"); b.classList.toggle("show");
+    closeLinePanel();
+    if(b.classList.contains("show")) renderEpg();
+    $("btnEpg").className="ctlbtn"+(b.classList.contains("show")?" act":"");
+    resetCtrlTimer();
+  };
+  $("btnLines").onclick=function(){
+    var p=$("linePanel");
+    $("epg").classList.remove("show"); $("btnEpg").className="ctlbtn";
+    p.classList.toggle("show");
+    $("btnLines").className="ctlbtn"+(p.classList.contains("show")?" act":"");
+    resetCtrlTimer();
+  };
+  $("btnPlay").onclick=function(){
+    /* 播放/暂停切换 */
+    if(NATIVE.active){ if(window.NativeTV && NativeTV.nativePause && !isNativePaused){ NativeTV.nativePause(); isNativePaused=true; } else if(window.NativeTV && NativeTV.nativeResume){ NativeTV.nativeResume(); isNativePaused=false; } }
+    else { var v=$("v"); if(v.paused){ v.play(); } else { v.pause(); } }
+    setPlayBtnUI();
+    resetCtrlTimer();
+  };
+  $("btnRatio").onclick=function(){
+    var v=$("v"), ratios=["contain","cover","fill"], i=(v.dataset.ri|0)+1;
+    if(i>=ratios.length) i=0;
+    v.dataset.ri=i; v.style.objectFit=ratios[i];
+    toast("画面比例："+ratios[i]);
+    resetCtrlTimer();
+  };
+  $("btnFav").onclick=function(){ toggleFav(cur.tid,cur.id,cur.name); setFavBtnUI(); };
+  /* 播放档位：秒开 ⇄ 稳定（原生缓冲门槛 + 软解缓冲一起切） */
+  $("btnTune").onclick=function(){ setTune(TUNE === "fast" ? "stable" : "fast"); resetCtrlTimer(); };
+  /* 播放信息角标：点一下在 关 → 简 → 详 之间循环（v2.8） */
+  $("statBadge").onclick=function(){ cycleStatsMode(); resetCtrlTimer(); };
+
+  /* 触屏手势：双击全屏 / 单击唤出控制条 / 亮度音量（手机端） */
+  bindTouchGestures();
+
+  /* ★ 后台暂停：切后台/锁屏时暂停播放，回前台恢复（软解 + 原生双通道）
+     ★ 恢复前必须确认还在播放层 —— closePlayer 后 visibilitychange 也会来，
+        那时把已清理的空 video play() 会把音频通道重新挂起来（实测真坑）。
+     ★ 注意：Activity.onPause 时 WebView 里 document.hidden 不会变 true
+        （View 仍 attached），visibilitychange 根本不触发 —— 所以真正的
+        后台暂停由原生 onPause 直接调 __appPause()（实测 HOME 残声根因）。 */
+  /* ★ __sessionClosed / __appWasPlaying 已提升为全局 var（见文件头部声明区）。
+     之前 var 声明在 init 里 → 与全局函数们读写的是两个不同变量，闸门失效。 */
+  window.__appPause = function(){
+    try{
+      window.__appPauseCount = (window.__appPauseCount || 0) + 1;   /* CDP 可验证执行 */
+      __appWasPlaying = $("player").classList.contains("show") &&
+                        (NATIVE.active ? !isNativePaused : ($("v") && !$("v").paused));
+      /* ★ 后台 = 彻底卸载播放引擎。实测（Android 9 / Chromium 91）：
+         v.pause()/muted/web.onPause()/web.pauseTimers()/detach 全都停不掉——
+         因为卸载会触发 mpegts 的 error/ended 回调 → nextLine() 又把下一条
+         线路拉起来（ExoPlayer 重新起播）。必须：① 先落下 __sessionClosed
+         闸门挡住所有自动重连；② 清掉 stall 定时器；③ 无条件释放原生通道。 */
+      __sessionClosed = true;
+      clearTimeout(stall.timer);
+      /* ★ 只有「确实还有东西在播」才需要拆播放引擎。
+         这道判断是保帧功能的第二重保险：我们自己调的 web.onPause()（退播放层
+         清音频）会触发 visibilitychange → 这里，那时 NATIVE.active 已是 false、
+         mpegts 实例也已 destroy —— 没有会话可拆，却会把刚钉好的保帧
+         release 掉。真的切后台时 NATIVE.active / player 都还在，照拆不误。 */
+      if(NATIVE.active || player){
+        if(window.NativeTV && NativeTV.nativeStop){
+          NativeTV.nativeStop();                     /* 无条件释放 ExoPlayer */
+          NATIVE.active = false;
+          clearInterval(NATIVE.timer);
+        }
+      }
+      var v=$("v");
+      if(player){ try{player.destroy();}catch(e){} player=null; }
+      if(v){ try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){} }
+    }catch(e){}
+  };
+  window.__appResume = function(){
+    try{
+      var v=$("v"); if(v) v.muted = false;
+      if(__appWasPlaying && $("player").classList.contains("show") &&
+         cur && cur.urls && cur.urls.length){
+        __sessionClosed = false;                   /* 显式重连：重新开闸 */
+        playIdx(cur.idx);                          /* 重新连流（重新选路） */
+      }
+    }catch(e){}
+    __appWasPlaying = false;
+  };
+  document.addEventListener("visibilitychange", function(){
+    var hidden = document.hidden || document.visibilityState==="hidden";
+    var playing = $("player").classList.contains("show");
+    if(hidden){
+      /* ★ 闸门：我们自己为「退播放层清音频」调的 web.onPause() 也会让页面变成
+         hidden，和真的切后台长得一模一样，而且这个事件**可能晚到 400ms 以上**
+         （所以用时间窗，不用「调完就复位」的布尔量 —— 那把实测被迟到事件绕过）。
+         不加闸门时：退播放层被误判成切后台 → __appPause → nativeStop → 保帧刚
+         钉好就被 release 清掉（v2.5.1 实测 logcat：FrozenFrame hide 紧跟
+         surface detached）。
+         ★ 真的 HOME/锁屏不依赖这里 —— 原生 onUserLeaveHint/onPause 会直接
+         驱动 __appPause，所以挡掉不会漏掉后台停声。 */
+      if(Date.now() < __mediaPauseGuardUntil) return;
+      window.__appPause();
+    } else if(playing) {
+      window.__appResume();
+    }
+  });
+
+  /* 时钟刷新 */
+  updateClock(); setInterval(updateClock, 30000);
+
+  /* ===== 遥控器 / 键盘方向键导航（TV 版核心） ===== */
+  /* ★ 只取真正可见的元素：切数据源会整行隐藏 tabs / grpbar，
+     不过滤的话遥控器会 focus 到看不见的分类上 */
+  function listOf(sel){
+    return [].slice.call(document.querySelectorAll(sel)).filter(function(e){
+      return e.getClientRects().length > 0;
+    });
+  }
+  var OK=[23,13,66,160];
+  var CHUP=[33,166], CHDN=[34,167];      /* 遥控器 频道+ / 频道- */
+  document.addEventListener("keydown", function(e){
+    var k=e.keyCode, ae=document.activeElement, inPlayer=$("player").classList.contains("show");
+
+    /* ---- 遥控器数字键直选频道（0-9，TV 版）----
+       输入数字后 1.2 秒内无后续数字 → 跳到该序号频道。
+       与「方向键导航 + OK」并存，互不干扰。 */
+    /* chanArr()：当前「频道清单」（RENDER.arr，由 loadCat/pickGroup/renderChOvChs 维护）。
+       v2.10.6 起旧列表 DOM 已删，遥控器切台全部走这份数据。 */
+    function chanArr(){ return (window.RENDER && RENDER.arr) || []; }
+    function hopChan(dir){
+      var arr=chanArr(); if(!arr.length) return;
+      var pos=-1;
+      for(var z=0;z<arr.length;z++){ if(String(arr[z].id)===String(cur.id)){ pos=z; break; } }
+      if(pos<0) pos=0;
+      var np=(pos+dir+arr.length)%arr.length;   /* 首尾循环 */
+      var nc=arr[np];
+      if(nc) openChannel(nc.tid||curCat, nc.id, nc.name);
+    }
+    if((!inPlayer || anyOvOpen()) && !(ae && ae.tagName==="INPUT")){
+      if(k>=7 && k<=16){                      /* KEYCODE_0..9 数字选台 */
+        e.preventDefault();
+        var digit=k-7;
+        numBuf = (numBuf + digit).slice(-3);
+        clearTimeout(numTimer);
+        var idx = parseInt(numBuf,10) - 1;
+        var arr0=chanArr();
+        if(idx>=0 && idx<arr0.length){
+          toast("跳转第 "+(idx+1)+" 个频道");
+          var el=document.querySelectorAll("#chOv.show .chi")[idx];
+          if(el) el.focus();
+        } else { toast("无第 "+(idx+1)+" 个频道"); }
+        numTimer=setTimeout(function(){
+          var c=chanArr()[parseInt(numBuf,10)-1];
+          if(c) openChannel(c.tid||curCat, c.id, c.name);
+          numBuf="";
+        }, 1200);
+        return;
+      }
+      /* ---- 遥控器 频道+/- 切台 ---- */
+      if(CHUP.indexOf(k)>=0 || CHDN.indexOf(k)>=0){
+        e.preventDefault();
+        hopChan(CHUP.indexOf(k)>=0 ? 1 : -1);
+        return;
+      }
+    }
+    /* ---- 播放中（浮层未开）：频道+/- 与 DPAD 上下切台，首尾循环 ---- */
+    if(inPlayer && !anyOvOpen() && (CHUP.indexOf(k)>=0 || CHDN.indexOf(k)>=0 || k===38 || k===40)){
+      var ctlF = ae && ae.closest && ae.closest("#ctrl");
+      if(!ctlF){
+        e.preventDefault();
+        hopChan(CHUP.indexOf(k)>=0 || k===40 ? 1 : -1);
+        return;
+      }
+    }
+
+    /* ---- v2.10 浮层打开时：方向键在浮层内导航，OK 点击 ---- */
+    if(inPlayer && anyOvOpen()){
+      e.preventDefault();
+      ovAutoKeep();      /* 有操作就重置 12s 自动关闭计时 */
+      if(OK.indexOf(k)>=0){ if(ae && typeof ae.click==="function" && ae.tagName!=="INPUT") ae.click(); return; }
+      if(k===38 || k===40){
+        var ovCont = ae && ae.closest && (ae.closest(".cats")||ae.closest(".chs")||ae.closest(".panel"));
+        if(!ovCont){
+          var f0=document.querySelector("#chOv.show .chi.on, #chOv.show .chi, #setOv.show .opt");
+          if(f0) f0.focus();
+          return;
+        }
+        var ovs=[].slice.call(ovCont.querySelectorAll(".cat,.chi,.opt")).filter(function(x){ return x.getClientRects().length>0; });
+        var oi=ovs.indexOf(ae), on1=ovs[oi+(k===40?1:-1)];
+        if(on1) on1.focus();
+        return;
+      }
+      /* 左右：频道列表浮层的 分组列 ↔ 频道列 */
+      if((k===37 || k===39) && ovOpen("ch")){
+        var inCats = ae && ae.closest && ae.closest(".cats");
+        var pool=[].slice.call(document.querySelectorAll(inCats?"#chOv.show .chi":"#chOv.show .cat"))
+          .filter(function(x){ return x.getClientRects().length>0; });
+        var tgt = pool[pool.indexOf(ae)<0 ? 0 : pool.indexOf(ae)];
+        if(tgt) tgt.focus();
+        return;
+      }
+      return;
+    }
+    /* ---- v2.10 播放中（TV）：菜单键=设置浮层；OK=频道列表浮层（控制条无焦点时） ---- */
+    if(inPlayer && k===82){ e.preventDefault(); openSetOv(); return; }
+    if(inPlayer && OK.indexOf(k)>=0){
+      var ctlFocus = ae && ae.closest && ae.closest("#ctrl");
+      if(!ctlFocus){ e.preventDefault(); openChOv(); return; }
+    }
+
+    if(inPlayer){ $("ctrl").classList.remove("hide"); resetCtrlTimer();
+      /* 全屏时按「返回」先退全屏；这里用 KEYCODE_BACK 由原生接管，不重复处理 */
+      var plist=listOf(".ctlbtn").concat(listOf("#lineGrid .line-item"));
+      if(plist.indexOf(ae)<0){
+        var fl=listOf("#lineGrid .line-item")[cur.idx]||listOf("#lineGrid .line-item")[0]; if(fl){ fl.focus(); return; }
+      }
+      var pi=plist.indexOf(ae);
+      if(OK.indexOf(k)>=0){ if(ae&&typeof ae.click==="function"&&ae.tagName!=="INPUT"){ ae.click(); } e.preventDefault(); return; }
+      if(k===37||k===38||k===39||k===40){ e.preventDefault();
+        if(pi<0){ if(plist[0]) plist[0].focus(); return; }
+        var np=plist[pi+((k===39||k===40)?1:-1)]; if(np) np.focus(); return; }
+      return;
+    }
+    /* v2.10.7：旧列表页已整体退役，焦点只可能落在播放层或浮层内，
+       上面各分支已全部覆盖，不再有列表页四行导航。 */
+  });
+  /* 播放档位：把上次选的口味同步到原生侧（Java 用 SharedPreferences 也存了一份），
+     并刷新按钮文案 */
+  applyTuneToNative(); syncTuneUI();
+
+  setSrc("wvt");                         /* 默认官网源（官网源在第一位） */
+}
+
+/* 数字键缓冲（遥控器直选频道用） */
+var numBuf="", numTimer=null;
+
+/* 原生旋转完成后回调：横屏时确保视频铺满，竖屏时恢复默认布局 */
+window.onOrientationChanged = function(isLandscape){
+  try{
+    if(isLandscape && $("player").classList.contains("show") && !IS_TV) setFsMode(true);
+  }catch(e){}
+};
+window.addEventListener("load", init);
+</script>
+</body>
+</html>

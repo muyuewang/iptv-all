@@ -1,0 +1,82 @@
+# ============================================================================
+# 纯净电视三端工程 · 仓库级忽略
+#   desktop/ 自己的运行时文件在 desktop/.gitignore 里（那边路径相对 desktop/ 解析）
+# ============================================================================
+
+# ---------- 安卓端构建产物 ----------
+android/build/
+android/*.apk
+android/*.apk.idsig
+android/_build_android.log
+
+# ---------- 安卓构建工具链（约 200 MB，按 README 现取）----------
+android/tools/android-14/
+android/tools/android-34/
+android/tools/media3/
+android/tools/exoplayer2/
+android/tools/platform-tools/
+android/tools/aapt2out/
+android/tools/*.zip
+android/tools/r8.jar
+android/tools/aapt2.jar
+android/tools/gen_logos_out/
+
+# ---------- Linux 端构建产物 ----------
+linux/build/
+linux/dist/
+
+# ---------- 调试残留 ----------
+# ★ 注意：Git 不支持「行尾注释」—— `_shots/   # 说明` 会被整行当成模式，
+#   结果就是什么都匹配不到。说明一律另起一行。
+# AES 交叉验证样本（gen_wvt_aes_fixture.py 产生）
+_aes_test/
+# 调试截图（check_wvt_embed.py 等自检脚本产出）
+_shots/
+# 覆盖旧产物前挪走的备份
+_prev/
+# exe 冒烟输出
+_smoke_out.txt
+# 桌面端调试截图 / 录屏（tools/shots/）
+tools/shots/
+*.log
+
+# ---------- 通用 ----------
+__pycache__/
+*.pyc
+
+# 构建产物绕 safe-delete 的临时挪放目录
+_out_trash_*/
+# 一次性声音残留调试脚本（保留 _test_audio_min/_test_audio_back/_test_audio_home2）
+tools/_diag_resid.py
+tools/_test_audio_deep.py
+tools/_test_audio_diag.py
+tools/_test_audio_final.py
+tools/_test_audio_flinger.py
+tools/_test_audio_home.py
+tools/_test_audio_leak.py
+tools/_test_audio_owner.py
+tools/_test_audio_owner2.py
+tools/_test_audio_sample.py
+tools/_test_audio_threads.py
+# 起播诊断（一次性）
+tools/_diag_play.py
+
+# 横竖屏/返回键回归截图（_test_orient_back.py 等产出）
+_shots_orient/
+
+# 官网源嗅探用的浏览器 profile（cdp 探针 produce，约 33 MB/次）
+.sniff*/
+
+# APK 构建产物（.gitignore 规则对已跟踪文件无效，v2.5 瘦身时移出）
+android/*.apk
+android/*.apk.idsig
+# 桌面临时探针截图
+_probe_dd_*.png
+_probe_*.png
+
+# ---------- 开源瘦身（v3.0 重新提交）----------
+# mpv.exe 120MB 超 GitHub 单文件 100MB 上限，伙伴按 README 自行下载放入 desktop/mpv/
+desktop/mpv/mpv.exe
+desktop/mpv/d3dcompiler_43.dll
+# 签名私钥不入库
+android/ks.jks

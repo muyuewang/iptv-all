@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.clean.tv"
+    android:versionCode="9"
+    android:versionName="2.3">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- 兼容手机与 Android TV -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <!-- minSdk 19 = Android 4.4：老 TV 盒子兼容。
+         4.4 走老 ExoPlayer2 硬解（API 16+），5.0+ 走 media3 硬解。
+         方法数超 65K，须 multidex（minSdk<21 时用 legacy multidex）。 -->
+    <uses-sdk android:minSdkVersion="19" android:targetSdkVersion="34" />
+
+    <application
+        android:name="androidx.multidex.MultiDexApplication"
+        android:label="纯净电视"
+        android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner"
+        android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:allowBackup="false">
+
+        <activity
+            android:name="com.clean.tv.MainActivity"
+            android:exported="true"
+            android:label="纯净电视"
+            android:banner="@drawable/tv_banner"
+            android:screenOrientation="portrait"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

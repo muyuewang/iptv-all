@@ -1,0 +1,37 @@
+# 构建产物
+build/
+dist/
+__pycache__/
+*.pyc
+
+# PyInstaller 自动生成的 spec 不入库，但下面两个是「手写、构建必需」，显式保留
+*.spec
+!电视直播原生.spec
+!电视直播.spec
+
+# 运行时生成（绿色版配置）
+fav.json
+settings.json
+logocache/
+tvlive.log
+.browser/
+_prev/
+# 官网源嗅探用的浏览器 profile（复用能把 40s 降到 2s）
+.sniff/
+# v2.4：WebView2 内嵌浏览器的用户数据目录（运行时生成）
+.wv2/
+# v2.4 排查实验残留（UDD/GPU 对照组、WebView2 SDK 副本、旧实现备份）
+_exp_udd*/
+_gpu_*/
+_wv2sdk/
+embed_cdp.py.bak
+# 官网源频道表缓存（24h TTL）
+wvt_channels.json
+# 官网源镜像/代理配置覆盖
+wvt_config.json
+# 官网源适配器表缓存（wvt.py 运行时生成）
+wvt_adapters.json
+wvt_cache/
+
+# 注意：安卓工具链 / 构建产物的忽略规则放在仓库根的 .gitignore 里
+# （本文件里的路径是相对 desktop/ 解析的，写 android/... 匹配不到）
