@@ -456,7 +456,10 @@ public class MainActivity extends Activity {
                                 pageView.setAlpha(on ? 0.35f : 1f);
                             }
                             android.util.Log.i("CleanTV/LC", "setPageOverlay " + on
-                                + " playing=" + pagePlayingSeen);
+                                + " playing=" + pagePlayingSeen
+                                + " alpha=" + pageView.getAlpha()
+                                + " vis=" + pageView.getVisibility()
+                                + " zTop=" + (root.getChildAt(root.getChildCount()-1) == pageView));
                         }
                     } catch (Throwable ignore) {}
                 }
