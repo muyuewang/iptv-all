@@ -86,6 +86,12 @@ public class MainActivity extends Activity {
      *  JS 侧按 devicePixelRatio 换算。 */
     private void fireOverlayIfFree(final boolean right, final float x, final float y) {
         if (web == null) { fireOverlay(right); return; }
+        /* ★ v2.10.13：未起播（状态页显示中）直接唤出，不问 JS —— 主 web 此时只有
+           状态页，不存在控制条/浮层等可点 UI；而官方页加载中渲染器忙，
+           evaluateJavascript 往返可能被拖到数秒，用户点了几下全「没反应」
+           （CCTV-4 欧洲这类重页面实测复现）。起播后仍走 JS 判定避开可点 UI。 */
+        if (!pagePlayingSeen) { fireOverlay(right); return; }
+        android.util.Log.i("CleanTV/LC", "tapFire right=" + right + " x=" + (int) x + " y=" + (int) y);
         try {
             web.evaluateJavascript(
                 "try{(window.__nativeTapOverlay?__nativeTapOverlay("
