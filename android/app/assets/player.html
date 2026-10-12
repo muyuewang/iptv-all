@@ -254,7 +254,7 @@
   #webmask.show{animation:layerIn .18s var(--ease);}
 
   /* Toast 堆叠容器（替代单条 #toast） */
-  #toasts{position:fixed;left:0;right:0;bottom:112px;z-index:99;display:flex;flex-direction:column;
+  #toasts{position:fixed;left:0;right:0;bottom:112px;z-index:800;display:flex;flex-direction:column;
     align-items:center;gap:8px;pointer-events:none;padding:0 16px;}
   body.tv #toasts{bottom:auto;top:32px;}
   .tst{display:flex;align-items:center;gap:9px;max-width:min(520px,92%);
@@ -275,7 +275,7 @@
   body.tv .tst{font-size:18px;padding:14px 24px;border-radius:18px;}
 
   /* 播放失败占位卡（替代一行冷文字）：图标 + 原因 + 可操作按钮 */
-  #errCard{position:absolute;left:50%;top:50%;z-index:8;width:min(360px,86%);
+  #errCard{position:absolute;left:50%;top:50%;z-index:750;width:min(360px,86%);
     transform:translate(-50%,-50%);background:rgba(18,20,26,.96);
     -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
     border:1px solid var(--line-strong);border-radius:var(--r-lg);padding:22px 20px 18px;
@@ -310,9 +310,14 @@
      全屏播放为主界面；长按中间往右滑 = 频道列表浮层，往左滑 = 设置浮层。
      浮层盖在播放画面上（半透明黑 + blur），播放不中断；BACK 关浮层。
      ========================================================================*/
+  /* ★ v2.10.13：浮层 z-index 6→700 —— 必须盖过 #status(600)：加载中状态页显示时
+     单击唤出浮层，原来被压在状态页下面完全看不见（用户实测「点击没反应」，
+     要等起播 hideStatus 才露出来）。toast 800 / errCard 750 保持在其上。 */
+  .ov{position:absolute;inset:0;z-index:700;display:none;background:rgba(0,0,0,.42);
+    animation:layerIn .2s var(--ease);}
   /* ★ v2.10.8：面板侧加深 + 视频侧渐透 —— 参考 WebViewTV 设置面板的「半屏暗渐变」：
      列表所在一侧文字清晰可读，另一侧尽量透出画面。 */
-  .ov{position:absolute;inset:0;z-index:6;display:none;background:rgba(0,0,0,.42);
+  .ov{position:absolute;inset:0;z-index:700;display:none;background:rgba(0,0,0,.42);
     animation:layerIn .2s var(--ease);}
   /* ★ v2.10.8：频道列表改「左侧挂板」——列表收进左边一块面板（手机 62% 宽 / TV 52%），
      右侧大半屏完全透出视频；点视频区任意空白即关闭（比全屏浮层的「空白」大得多）。
@@ -324,7 +329,7 @@
     background:linear-gradient(180deg,rgba(9,10,16,.88),rgba(9,10,16,.94));
     border-right:1px solid rgba(255,255,255,.09);
     box-shadow:8px 0 40px rgba(0,0,0,.45);}
-  .ov{position:absolute;inset:0;z-index:6;display:none;background:rgba(0,0,0,.42);
+  .ov{position:absolute;inset:0;z-index:700;display:none;background:rgba(0,0,0,.42);
     animation:layerIn .2s var(--ease);}
   .ov.show{display:flex;}
   /* 底色变浅后给文字加投影保可读（视频亮画面直接衬在文字底下） */
