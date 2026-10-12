@@ -569,6 +569,14 @@ public class MainActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                 applyOrientation(false);
             }
+            /* ★ JS console → logcat（v2.10.9）：网页侧 JS 报错在电视盒子上无法
+               可视化调试，转发到 logcat tag "CleanTV/JS"（adb logcat -s CleanTV/JS）。 */
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                android.util.Log.i("CleanTV/JS", "[" + cm.messageLevel() + "] "
+                        + cm.message() + " @" + cm.sourceId() + ":" + cm.lineNumber());
+                return true;
+            }
         });
 
         root.addView(web, new FrameLayout.LayoutParams(

@@ -102,25 +102,42 @@ if [ $JAVAC_EXIT -ne 0 ]; then
   exit 1
 fi
 
-echo "== 3/5 d8（转 dex，多 dex）=="
+echo "== 3/5 dex（R8 树摇收缩，失败回退 d8）=="
 mkdir -p "$OUT/dex"
 # media3 + exoplayer2 + guava 体积大，方法数远超单 dex 65K 上限；
-# d8 在 min-api>=21 时会自动切分 classes.dex / classes2.dex …。
-# ★ 注意 --min-api 降到 19（兼容 Android 4.4）；multidex 仍由 d8 自动处理，
-#   API<21 需要 legacy multidex 支持 —— 见 AndroidManifest 的 androidx.multidex。
+# ★ v2.10.9 起默认走 R8 --release：把 18MB 依赖树摇到真正用到的类（dex 13.2MB→约一半），
+#   回退开关 R8_DISABLE=1 走旧 d8 全量路径（排障用）。
+# --min-api 19（兼容 Android 4.4）；multidex 仍自动处理 —— 见 AndroidManifest 的 androidx.multidex。
 #
 # ★ 去重：media3 与 exoplayer2 都带 androidx.core / annotation / guava 等传递依赖，
-#   版本不同会导致 d8 报「defined multiple times」。处理：
+#   版本不同会报「defined multiple times」。处理：
 #   - androidx/guava 系列：统一用 media3 目录的（版本更新，向后兼容老 ExoPlayer2）
 #   - exoplayer2 目录：只取它独有的 exoplayer-*.jar + multidex.jar
 E2_ONLY=$(ls "$E2LIB"/exoplayer-*.jar "$E2LIB"/multidex.jar 2>/dev/null)
+DEX_INPUTS="$(find "$OUT/classes" -name "*.class") $(ls "$M3LIB"/*.jar) $E2_ONLY"
 
-$D8 --lib "$AJAR" --min-api 19 \
-  --main-dex-list "$HERE/build/maindex.txt" \
-  --output "$OUT/dex" \
-  $(find "$OUT/classes" -name "*.class") \
-  $(ls "$M3LIB"/*.jar) \
-  $E2_ONLY
+if [ "${R8_DISABLE:-0}" != "1" ]; then
+  set +e
+  java -cp "$R8" com.android.tools.r8.R8 --release --min-api 19 \
+    --lib "$AJAR" \
+    --pg-conf "$HERE/proguard-rules.pro" \
+    --main-dex-list "$HERE/build/maindex.txt" \
+    --output "$OUT/dex" \
+    $DEX_INPUTS > "$OUT/r8.log" 2>&1
+  R8_EXIT=$?
+  set -e
+  if [ $R8_EXIT -ne 0 ]; then
+    echo "R8 收缩失败 (exit=$R8_EXIT)，回退 d8。日志（尾部）："
+    tail -15 "$OUT/r8.log" || true
+  fi
+fi
+if [ "${R8_DISABLE:-0}" = "1" ] || [ ! -e "$OUT/dex/classes.dex" ]; then
+  [ "${R8_DISABLE:-0}" = "1" ] || echo "（R8 未产出，走 d8 全量）"
+  $D8 --lib "$AJAR" --min-api 19 \
+    --main-dex-list "$HERE/build/maindex.txt" \
+    --output "$OUT/dex" \
+    $DEX_INPUTS
+fi
 
 echo "== 4/5 合并 dex + zipalign =="
 cp "$OUT/base.apk" "$OUT/unsigned.apk"

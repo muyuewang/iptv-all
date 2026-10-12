@@ -909,30 +909,6 @@ function pickBestLine(urls){
   });
 }
 
-/* 兼容旧名 */
-function pickFastest(urls){ return pickBestLine(urls); }
-
-/* 对每条线路发一次轻量探测，测「首字节延迟」；返回最快线路的索引。
-   超时/失败的线路排到最后，避免默认走慢线路造成起播卡顿。 */
-function probeOnce(url, timeoutMs){
-  return new Promise(function(resolve){
-    var t0=Date.now(), done=false, xhr=new XMLHttpRequest();
-    var finish=function(ok){ if(done) return; done=true; try{xhr.abort();}catch(e){} resolve(ok?Date.now()-t0:1e9); };
-    var to=setTimeout(function(){ finish(false); }, timeoutMs);
-    try{
-      xhr.open("GET", url, true);
-      xhr.responseType="arraybuffer";
-      xhr.onreadystatechange=function(){
-        /* 2 = HEADERS_RECEIVED：首字节到手，足够判断延迟 */
-        if(xhr.readyState===2){ clearTimeout(to); finish(true); }
-      };
-      xhr.onerror=function(){ clearTimeout(to); finish(false); };
-      /* Range 只取头部，减少流量 */
-      try{ xhr.setRequestHeader("Range","bytes=0-1023"); }catch(e){}
-      xhr.send();
-    }catch(e){ clearTimeout(to); finish(false); }
-  });
-}
 function renderLines(){
   var w=$("lineGrid"); w.innerHTML="";
   cur.urls.forEach(function(u,i){

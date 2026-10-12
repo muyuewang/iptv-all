@@ -81,3 +81,6 @@ desktop/mpv/d3dcompiler_43.dll
 # 签名私钥不入库
 android/ks.jks
 _ref_wvtv/
+
+# 开发期一次性调试脚本不进开源仓库（本地保留）
+tools/_*
