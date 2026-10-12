@@ -73,7 +73,8 @@ public class MainActivity extends Activity {
     /** 单击已确认：唤出浮层（right=true 设置 / false 频道列表） */
     private void fireOverlay(boolean right) {
         ovOpenUI = true;
-        try { if (pageView != null) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
+        /* ★ v2.10.11：官方页未起播保持 alpha 0（黑底过渡中），别把原始网页拉到 0.35 */
+        try { if (pageView != null && pagePlayingSeen) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
         // __ovGuardUntil：抬起产生的 click 别把刚打开的浮层关掉；__nativeTapAt 挡住
         // 同一次单击在网页 onTap 里的「切控制条」动作
         jsApp("window.__ovGuardUntil=Date.now()+900;window.__nativeTapAt=Date.now();"
@@ -424,7 +425,10 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean hasWebPage() { return true; }
 
-        /** v2.10：半透明浮层开/关 —— 开时把官方页降到 0.35 alpha（媒体继续渲染），关时恢复 */
+        /** v2.10：半透明浮层开/关 —— 开时把官方页降到 0.35 alpha（媒体继续渲染），关时恢复。
+         *  ★ v2.10.11：官方页**起播前**（pagePlayingSeen=false，还在黑底过渡 alpha 0）
+         *  不得见光 —— 实测加载中点击唤出浮层，alpha 被拉到 0.35/恢复 1，原始网页和
+         *  原始播放器就透出来了。未起播时开/关都维持 0，起播后 fadeInPage 自然接管。 */
         @JavascriptInterface
         public void setPageOverlay(final boolean on) {
             runOnUiThread(new Runnable() {
@@ -432,11 +436,15 @@ public class MainActivity extends Activity {
                     ovOpenUI = on;   /* 与触摸转发闸门同步（见 ovOpenUI 注释）；pageView 为 null（本机源）也要更新 */
                     try {
                         if (pageView != null) {
-                            /* ★ v2.10.3：降 alpha 不 INVISIBLE —— INVISIBLE 会触发
-                               Chromium 引擎级暂停媒体（onVisibilityChanged），
-                               视频直接断；半透明则官方页继续渲染，浮层透出来 */
-                            pageView.setAlpha(on ? 0.35f : 1f);
-                            android.util.Log.i("CleanTV/LC", "setPageOverlay " + on);
+                            if (!pagePlayingSeen) { pageView.setAlpha(0f); }
+                            else {
+                                /* ★ v2.10.3：降 alpha 不 INVISIBLE —— INVISIBLE 会触发
+                                   Chromium 引擎级暂停媒体（onVisibilityChanged），
+                                   视频直接断；半透明则官方页继续渲染，浮层透出来 */
+                                pageView.setAlpha(on ? 0.35f : 1f);
+                            }
+                            android.util.Log.i("CleanTV/LC", "setPageOverlay " + on
+                                + " playing=" + pagePlayingSeen);
                         }
                     } catch (Throwable ignore) {}
                 }
