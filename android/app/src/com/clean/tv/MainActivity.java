@@ -473,7 +473,8 @@ public class MainActivity extends Activity {
                     pagePlayingSeen = true;     // 已起播：看门狗收兵
                     pageFailedSent = false;      // 已起播：允许下次超时再触发
                     applyOrientation(true);
-                    fadeInPage();                // ★ v2.10.8：起播了才让官方页见光（淡入接画面）
+                    /* ★ v2.10.13：见 fadeInPage 内的 ovOpenUI 守卫（浮层开着不能拉亮） */
+                    fadeInPage();
                     try {
                         web.evaluateJavascript(
                             "window.__onWebPagePlaying&&window.__onWebPagePlaying()", null);
@@ -875,9 +876,14 @@ public class MainActivity extends Activity {
         armPageWatchdog();
     }
 
-    /** 官网页淡入（v2.10.8）：页面层从黑底信息页平滑过渡到官方页画面。 */
+    /** 官网页淡入（v2.10.8）：页面层从黑底信息页平滑过渡到官方页画面。
+     *  ★ v2.10.13：浮层开着时直接早退 —— 加载中唤出浮层（pageView 压到 0/0.35）
+     *  后官方页起播，fadeInPage 会把 alpha 拉回 1，官方页全亮盖住浮层，
+     *  用户看到「点了没反应」。守卫放这里覆盖所有调用点；
+     *  浮层关闭走 setPageOverlay(false) 恢复 1。 */
     private void fadeInPage() {
         if (pageView == null) return;
+        if (ovOpenUI) return;
         try {
             if (pageView.getAlpha() >= 1f) return;
             pageView.animate().alpha(1f).setDuration(450).start();
