@@ -2200,9 +2200,16 @@ function renderChOvChs(asyncArr){
   if(!arr){
     w.innerHTML='<div class="chi"><span class="nm" style="color:var(--fg-mute)">加载中…</span></div>';
     if(srcMode!=="wvt"){
-      C.fetchChannels(CHOV.group).then(function(res){
-        if(!ovOpen("ch") || CHOV.src!=="local" || CHOV.group!==curCat) return;
-        allChans=res||[]; renderChOvChs();
+      /* ★ v2.10.10 修复「除综合外全在加载中」：浮层分组点击只更新 CHOV.group、
+         不更新底层 curCat，而 fetch 回调原来无参调 renderChOvChs() → 内部
+         chOvChans 再判 curCat===key 永远为假 → 返回 null → 再进异步 —— 死循环。
+         现在回调显式构造频道数组传入渲染，并把 curCat 一并同步（换台兜底 tid
+         与缓存命中条件随之一致）。 */
+      var reqGroup = CHOV.group;
+      C.fetchChannels(reqGroup).then(function(res){
+        if(!ovOpen("ch") || CHOV.src!=="local" || CHOV.group!==reqGroup) return;
+        allChans=res||[]; curCat=reqGroup;
+        renderChOvChs((res||[]).map(function(c,i){ return { tid:reqGroup, id:c.id, name:c.name, no:i+1 }; }));
       }).catch(function(){ var b=$("chOvChs"); if(b) b.innerHTML=""; });
     }
     return;

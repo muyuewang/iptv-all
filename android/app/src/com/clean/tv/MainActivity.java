@@ -85,6 +85,7 @@ public class MainActivity extends Activity {
      *  JS 侧按 devicePixelRatio 换算。 */
     private void fireOverlayIfFree(final boolean right, final float x, final float y) {
         if (web == null) { fireOverlay(right); return; }
+        android.util.Log.i("CleanTV/LC", "tapFire right=" + right + " x=" + (int) x + " y=" + (int) y);
         try {
             web.evaluateJavascript(
                 "try{(window.__nativeTapOverlay?__nativeTapOverlay("
@@ -121,6 +122,7 @@ public class MainActivity extends Activity {
                 /* v2.10.9 长按改单击：短按（<450ms、无明显拖动）唤浮层。
                    是否点在控制条等可点 UI 上由网页 __nativeTapOverlay 判定（异步）。 */
                 if (!ovOpenUI && !gDragged && ev.getEventTime() - gDownT < 450) {
+                    android.util.Log.i("CleanTV/LC", "tapUP dt=" + (ev.getEventTime() - gDownT));
                     fireOverlayIfFree(gDownX * 2 > Math.max(1, root.getWidth()), gDownX, gDownY);
                 }
                 break;
