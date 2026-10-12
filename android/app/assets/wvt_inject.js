@@ -643,25 +643,10 @@
     }
   }
 
-  /* ---------------------------------------------------------- 返回按钮 */
-  function mountClose() {
-    if (document.getElementById(CLOSE_ID)) return;
-    var b = document.createElement("div");
-    b.id = CLOSE_ID;
-    b.textContent = "✕ 返回";
-    b.style.cssText = "position:fixed;left:12px;top:12px;z-index:2147483647;" +
-      "padding:8px 14px;border-radius:999px;background:rgba(0,0,0,.55);" +
-      "color:#fff;font:600 14px/1 -apple-system,sans-serif;cursor:pointer;" +
-      "backdrop-filter:blur(6px);opacity:.35;transition:opacity .2s;";
-    b.addEventListener("mouseenter", function () { b.style.opacity = "1"; });
-    b.addEventListener("mouseleave", function () { b.style.opacity = ".35"; });
-    b.addEventListener("click", function () {
-      var r = call("closePage");
-      if (r === null) { try { history.back(); } catch (e) { } }
-    });
-    var root = document.body || document.documentElement;
-    if (root) root.appendChild(b);
-  }
+  /* v2.10.13：注入「✕ 返回」角标（mountClose）已退役 —— v2.10 改版后 BACK
+     统一走原生确认卡（doBack → __tvBack），网页层这个返回既无用又毁画面
+     （用户实测反馈 CCTV-5+ 页面左上角挂着碍事）。CLOSE_ID 保留给
+     sweepOverlays 的豁免清单（防旧标记残留误收）。 */
 
   window.wvt_resume = function () {
     /* 已经在播了就别推倒重来 —— 晚到的 onPageFinished / onProgressChanged
@@ -673,12 +658,10 @@
     t0 = Date.now();
     stuck = 0;
     video = null;
-    mountClose();
     schedule(600);
   };
 
   try {
-    mountClose();
     /* 旋屏 / 窗口尺寸变化后重钉一次 —— 否则画面会停留在旧尺寸（看起来就是「显示不全」） */
     var refit = function () {
       if (!video) return;

@@ -86,7 +86,6 @@ public class MainActivity extends Activity {
      *  JS 侧按 devicePixelRatio 换算。 */
     private void fireOverlayIfFree(final boolean right, final float x, final float y) {
         if (web == null) { fireOverlay(right); return; }
-        android.util.Log.i("CleanTV/LC", "tapFire right=" + right + " x=" + (int) x + " y=" + (int) y);
         try {
             web.evaluateJavascript(
                 "try{(window.__nativeTapOverlay?__nativeTapOverlay("
@@ -123,7 +122,6 @@ public class MainActivity extends Activity {
                 /* v2.10.9 长按改单击：短按（<450ms、无明显拖动）唤浮层。
                    是否点在控制条等可点 UI 上由网页 __nativeTapOverlay 判定（异步）。 */
                 if (!ovOpenUI && !gDragged && ev.getEventTime() - gDownT < 450) {
-                    android.util.Log.i("CleanTV/LC", "tapUP dt=" + (ev.getEventTime() - gDownT));
                     fireOverlayIfFree(gDownX * 2 > Math.max(1, root.getWidth()), gDownX, gDownY);
                 }
                 break;
@@ -132,6 +130,14 @@ public class MainActivity extends Activity {
            状态一致，整段事件流都走同一条路）。 */
         if (ovOpenUI && web != null) {
             try { web.dispatchTouchEvent(ev); } catch (Throwable ignore) {}
+            return true;
+        }
+        /* ★ v2.10.13：官方页加载中（未起播）pageView 虽 alpha0 但仍在最上层收触摸 ——
+           用户点下的位置被隐形官方页吃掉，等起播淡入后这些点击恰好落在页面控件上
+           就「凭空生效」（用户实测：加载中点不动，加载完乱跳）。直接吞掉 ——
+           唤浮层已在上面 UP 分支处理完（ovOpenUI=true 走不到这里）。
+           ★ 不能用 INVISIBLE：会触发 Chromium 引擎级暂停，页面起播判定可能死锁。 */
+        if (!pagePlayingSeen && pageView != null) {
             return true;
         }
         return super.dispatchTouchEvent(ev);

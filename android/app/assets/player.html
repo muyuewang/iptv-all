@@ -2488,10 +2488,15 @@ function init(){
       var nc=arr[np];
       if(nc) openChannel(nc.tid||curCat, nc.id, nc.name);
     }
-    if((!inPlayer || anyOvOpen()) && !(ae && ae.tagName==="INPUT")){
-      if(k>=7 && k<=16){                      /* KEYCODE_0..9 数字选台 */
+    /* ★ v2.10.13：数字选台随时可用（原来被 (!inPlayer||anyOvOpen) 包住 ——
+       播放中无浮层按遥控器数字键没反应，TV 用户实测反馈） */
+    if(!(ae && ae.tagName==="INPUT")){
+      if(k>=7 && k<=16 || (k>=48 && k<=57)){  /* KEYCODE_0..9 数字选台 */
         e.preventDefault();
-        var digit=k-7;
+        /* ★ v2.10.13：DOM keyCode 与 Android keycode 两套并存 —— WebView 把
+           主键盘数字翻成 DOM 标准（'1'=49…'9'=57,'0'=48），只认 7..16 时
+           永远匹配不上（实测播放中按「1」无反应）。两套都收。 */
+        var digit = (k>=48) ? ((k===48) ? 0 : k-48) : (k-7);
         numBuf = (numBuf + digit).slice(-3);
         clearTimeout(numTimer);
         var idx = parseInt(numBuf,10) - 1;
@@ -2508,6 +2513,8 @@ function init(){
         }, 1200);
         return;
       }
+    }
+    if((!inPlayer || anyOvOpen()) && !(ae && ae.tagName==="INPUT")){
       /* ---- 遥控器 频道+/- 切台 ---- */
       if(CHUP.indexOf(k)>=0 || CHDN.indexOf(k)>=0){
         e.preventDefault();
