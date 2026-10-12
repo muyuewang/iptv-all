@@ -370,6 +370,33 @@ def load_config(cache_dir=None, ttl=RAW_FILE_TTL, force=False):
         return dict(FALLBACK_CONFIG)
 
 
+def _url_rank(u):
+    """线路优先级（v2.10.9）：用户实测 tv.cctv.com 官网直播页起播很慢，
+    央视频（yangshipin）最快。消费端统一重排，联网刷新后也生效：
+      央视频(0) > 移动直播间 cctvnews(1) > 其它(2) > tv.cctv.com 官网页(3)。
+    只排序不删除 —— tv.cctv.com 留作兜底线路。"""
+    s = str(u or "")
+    if "yangshipin" in s:
+        return 0
+    if "cctvnews" in s or "liveRoom" in s:
+        return 1
+    if "tv.cctv.com" in s:
+        return 3
+    return 2
+
+
+def normalize_channels(chans):
+    """对频道表按 _url_rank 做稳定排序（每频道内线路顺序）。"""
+    if not chans:
+        return chans
+    for c in chans:
+        urls = c.get("urls") or []
+        if len(urls) >= 2:
+            # Python sort 本身稳定，同分保持原始顺序
+            c["urls"] = sorted(urls, key=lambda x: _url_rank(x.get("url")))
+    return chans
+
+
 def load_channels(cache_dir=None, ttl=RAW_FILE_TTL, force=False, proxies=None):
     """
     取频道表，返回 [{group, name, urls:[{url, extra}]}, ...]。
@@ -378,14 +405,14 @@ def load_channels(cache_dir=None, ttl=RAW_FILE_TTL, force=False, proxies=None):
     if not force:
         c = _read_cache(cache_dir, "channels", ttl)
         if c:
-            return c
+            return normalize_channels(c)
     try:
         proxies = proxies or (load_config(cache_dir).get("githubProxies") or DEFAULT_PROXIES)
         data, _ = download_dat(DATA_FILES["channels"], proxies=proxies)
         chans = decrypt_dat_json(data)
         if chans:
             _write_cache(cache_dir, "channels", chans)
-            return chans
+            return normalize_channels(chans)
     except Exception:
         pass
     c = _read_cache(cache_dir, "channels", 0)      # 过期缓存也好过没有
@@ -435,10 +462,11 @@ def peek(cache_dir=None):
         ad = _read_cache(cache_dir, "adapters", 0)
         if not ad:
             ad = builtin_snapshot().get("adapters", [])
-        return ch, ad, "cache"
+        return normalize_channels(ch), ad, "cache"
     snap = builtin_snapshot()
     if snap.get("channels"):
-        return (snap.get("channels") or [], snap.get("adapters") or [], "builtin")
+        return (normalize_channels(snap.get("channels") or []),
+                snap.get("adapters") or [], "builtin")
     return [], [], "none"
 
 

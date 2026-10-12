@@ -55,25 +55,48 @@ public class MainActivity extends Activity {
     private WebView pageView;
     private String pageInjectJs;
 
-    /* ---------------- v2.10 长按手势（唤出半透明浮层） ----------------
+    /* ---------------- v2.10.9 单击手势（唤出半透明浮层） ----------------
        在 Activity 级 dispatchTouchEvent 里统一检测（官方页 pageView 盖在
        主 WebView 上面时，网页层的手势根本收不到触摸 —— 所以必须在原生层）。
-       判定（v2.10.3 用户定稿，与初版相反）：按住 450ms 不动即触发，按 **起始位置** 分：
-         左半屏 = 频道列表 openChOv()；右半屏 = 设置 openSetOv()。
-       大幅竖向移动取消（那是亮度/音量手势）。触发时官方页 pageView 只降
+       判定（v2.10.9 用户定稿，长按改单击）：短按（<450ms、位移<60px）即触发，
+       按 **起始位置** 分：左半屏 = 频道列表 openChOv()；右半屏 = 设置 openSetOv()。
+       是否唤出由网页侧 __nativeTapOverlay 最终判定 —— 点在控制条 / 确认卡 /
+       线路面板等可点 UI 上时网页自己跳过，浮层不抢交互。
+       大幅竖向移动（亮度/音量手势）不触发。触发时官方页 pageView 只降
        alpha 到 0.35（★ 不能 INVISIBLE —— 那会触发 Chromium 引擎级暂停媒体，
        视频直接断；半透明则页面继续渲染、视频一直可见，浮层从底下透出来），
        关浮层时恢复 1。 */
-    private final Handler gHandler = new Handler(Looper.getMainLooper());
     private float gDownX, gDownY;
-    private final Runnable gLongPress = new Runnable() {
-        @Override public void run() {
-            try {
-                int w = Math.max(1, root.getWidth());
-                fireOverlay(gDownX * 2 > w);
-            } catch (Throwable ignore) {}
-        }
-    };
+    private long gDownT;
+    private boolean gDragged;
+
+    /** 单击已确认：唤出浮层（right=true 设置 / false 频道列表） */
+    private void fireOverlay(boolean right) {
+        ovOpenUI = true;
+        try { if (pageView != null) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
+        // __ovGuardUntil：抬起产生的 click 别把刚打开的浮层关掉；__nativeTapAt 挡住
+        // 同一次单击在网页 onTap 里的「切控制条」动作
+        jsApp("window.__ovGuardUntil=Date.now()+900;window.__nativeTapAt=Date.now();"
+            + "try{" + (right ? "openSetOv&&openSetOv()" : "openChOv&&openChOv()") + "}catch(e){}");
+    }
+
+    /** 落点是否点在网页的可点 UI（控制条/确认卡/线路面板/节目单）上 —— 由注入 JS 判定，
+     *  命中则不唤浮层（浮层 alpha0.35 会盖住这些 UI 的点击）。坐标为原生物理像素，
+     *  JS 侧按 devicePixelRatio 换算。 */
+    private void fireOverlayIfFree(final boolean right, final float x, final float y) {
+        if (web == null) { fireOverlay(right); return; }
+        try {
+            web.evaluateJavascript(
+                "try{(window.__nativeTapOverlay?__nativeTapOverlay("
+                    + (int) x + "," + (int) y + "):1)?'1':'0'}catch(e){'1'}",
+                new android.webkit.ValueCallback<String>() {
+                    @Override public void onReceiveValue(String v) {
+                        if (v != null && v.indexOf("0") >= 0) return;   // 命中 UI，跳过
+                        fireOverlay(right);
+                    }
+                });
+        } catch (Throwable t) { fireOverlay(right); }
+    }
 
     /** 浮层 UI 是否开着（与 pageView alpha 同步维护）。
      *  ★ v2.10.5：开着时 pageView 虽然半透明但仍在最上层接收触摸（v2.10.3 改 alpha
@@ -81,30 +104,25 @@ public class MainActivity extends Activity {
      *  把触摸直接转发给底层主 WebView（浮层所在处），否则浮层点不到也关不掉。 */
     private boolean ovOpenUI = false;
 
-    /** 长按已确认：唤出浮层（right=true 设置 / false 频道列表） */
-    private void fireOverlay(boolean right) {
-        ovOpenUI = true;
-        try { if (pageView != null) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
-        // __ovGuardUntil：抬起产生的 click 别把刚打开的浮层关掉
-        jsApp("window.__ovGuardUntil=Date.now()+900;"
-            + "try{" + (right ? "openSetOv&&openSetOv()" : "openChOv&&openChOv()") + "}catch(e){}");
-    }
-
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 gDownX = ev.getX(); gDownY = ev.getY();
-                gHandler.postDelayed(gLongPress, 450);
+                gDownT = ev.getEventTime();
+                gDragged = false;
                 break;
             case MotionEvent.ACTION_MOVE:
-                /* 大幅竖向移动才取消长按（亮度/音量手势）。横向移动不取消 ——
-                   长按触发只看按住时长与起始位置。 */
-                if (Math.abs(ev.getY() - gDownY) > 60) gHandler.removeCallbacks(gLongPress);
+                /* 大幅移动（亮度/音量手势、滑动）不算单击 */
+                if (Math.abs(ev.getY() - gDownY) > 60 || Math.abs(ev.getX() - gDownX) > 60)
+                    gDragged = true;
                 break;
             case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL:
-                gHandler.removeCallbacks(gLongPress);
+                /* v2.10.9 长按改单击：短按（<450ms、无明显拖动）唤浮层。
+                   是否点在控制条等可点 UI 上由网页 __nativeTapOverlay 判定（异步）。 */
+                if (!ovOpenUI && !gDragged && ev.getEventTime() - gDownT < 450) {
+                    fireOverlayIfFree(gDownX * 2 > Math.max(1, root.getWidth()), gDownX, gDownY);
+                }
                 break;
         }
         /* ★ 浮层开着：触摸绕过半透明的 pageView，直接送主 WebView（长按手势检测在上面已做完，

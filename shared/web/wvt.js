@@ -313,6 +313,35 @@
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(obj)); } catch (e) { }
   }
 
+  /* ------------------------------------------------------------ 线路优先级（v2.10.9）
+     用户实测：tv.cctv.com 官网直播页起播要等很久，央视频（yangshipin）最快。
+     上游 full.dat 把 tv.cctv.com 放第一，这里在消费端统一重排（联网刷新后也生效）：
+       央视频(0) > 移动直播间 cctvnews(1) > 其它(2) > tv.cctv.com 官网页(3)。
+     只排序不删除 —— tv.cctv.com 留作兜底线路。稳定排序手工实现（装饰-排序-还原），
+     Android 4.4 老 WebView 的 Array.sort 不保证稳定。 */
+  function urlRank(u) {
+    var s = String(u || "");
+    if (s.indexOf("yangshipin") >= 0) return 0;
+    if (s.indexOf("cctvnews") >= 0 || s.indexOf("liveRoom") >= 0) return 1;
+    if (s.indexOf("tv.cctv.com") >= 0) return 3;
+    return 2;
+  }
+  function normalizeChannel(c) {
+    if (!c || !c.urls || c.urls.length < 2) return c;
+    var arr = [];
+    for (var i = 0; i < c.urls.length; i++) arr.push({ u: c.urls[i], r: urlRank(c.urls[i].url), i: i });
+    arr.sort(function (a, b) { return (a.r - b.r) || (a.i - b.i); });
+    var out = [];
+    for (var k = 0; k < arr.length; k++) out.push(arr[k].u);
+    return { group: c.group, name: c.name, urls: out };
+  }
+  function normalizeChannels(chans) {
+    if (!chans || !chans.length) return chans;
+    var out = [];
+    for (var i = 0; i < chans.length; i++) out.push(normalizeChannel(chans[i]));
+    return out;
+  }
+
   /* ------------------------------------------------------------ 快照 -> 频道表 */
   function parseSnapshot(snap) {
     if (!snap) return { channels: [], adapters: [] };
@@ -415,6 +444,10 @@
           return { channels: snap.channels, adapters: snap.adapters, from: "builtin" };
         }
         return self.refresh();
+      }).then(function (res) {
+        /* v2.10.9：出口统一按线路优先级重排（详见 normalizeChannel 注释） */
+        res.channels = normalizeChannels(res.channels);
+        return res;
       });
     },
 

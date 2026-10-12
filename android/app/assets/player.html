@@ -1886,6 +1886,8 @@ function bindTouchGestures(){
   /* 单击 / 双击判定（click + pointerup 兜底） */
   function onTap(e){
     if(inCtrl(e.target)) return;
+    /* v2.10.9：原生单击唤浮层的手势，同一次 click 不再切控制条 */
+    if(Date.now() - (window.__nativeTapAt||0) < 400) return;
     /* v2.10：浮层开着时不在这里处理 —— 点击交给 .ov 自己的 click listener
        （频道项 onclick 换台 / 空白处关闭）。★ 不能在这里 closeAllOv：
        pointerup 先把浮层 display:none 的话，后续 click 落不到频道项上，
@@ -2126,6 +2128,22 @@ function ovClickClose(e){
   closeAllOv();
 }
 try{ $("chOv").addEventListener("click", ovClickClose); $("setOv").addEventListener("click", ovClickClose); }catch(e){}
+
+/* ---------- v2.10.9 原生单击唤浮层的落点判定 ----------
+   原生 dispatchTouchEvent 短按抬起时问这里：「这一点会不会点在可交互 UI 上？」
+   命中控制条 / 确认卡 / 线路面板 / 节目单 / 浮层本身 → 返回 false 不唤浮层
+   （浮层是 alpha0.35 的 pageView 在最上层，一旦弹出这些 UI 就点不到了）。
+   坐标是原生物理像素，要按 devicePixelRatio 换算成 CSS 像素。 */
+window.__nativeTapOverlay = function(px, py){
+  try{
+    var dpr = window.devicePixelRatio || 1;
+    var el = document.elementFromPoint(px / dpr, py / dpr);
+    if(!el) return true;                     /* 视频区空白 → 唤 */
+    if(inCtrl(el) || inOv(el)) return false; /* 控制条 / 浮层 */
+    if(el.closest && el.closest("#errCard,#linePanel,#epg")) return false; /* 确认卡/面板 */
+    return true;
+  }catch(e){ return true; }
+};
 
 /* TV：BACK = 确认退出卡（用户定稿）。由 MainActivity doBack 的 TV 分支调用，
    返回 '1' 表示已消费（浮层关闭 / 确认卡已弹）。 */
