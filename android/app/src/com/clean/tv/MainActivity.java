@@ -712,6 +712,13 @@ public class MainActivity extends Activity {
         if (pageView != null) return pageView;
         WebView v = new WebView(this);
         v.setBackgroundColor(Color.BLACK);
+        /* ★ v2.10.13：官方页不参与按键焦点 —— WebView 默认可聚焦，showPage 把它
+           挂上来后可能夺走主 WebView 的焦点，网页线路加载中按 DPAD/数字键换台
+           全被官方页吃掉（用户实测：状态页「正在拉起播放」时换台无效）。
+           官方页只需要触摸和渲染，不需要按键；锁死后系统焦点始终留在主 WebView，
+           换台/数字选台/OK 在加载中照样通。 */
+        v.setFocusable(false);
+        v.setFocusableInTouchMode(false);
         WebSettings s = v.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
