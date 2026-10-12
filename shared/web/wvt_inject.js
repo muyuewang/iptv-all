@@ -552,6 +552,32 @@
   }
 
   /* ---------------------------------------------------------- 轮询 */
+  /* ★ v2.10.8：隐藏官方页自己的「× 返回」角标（央视频/央视网播放页左上角）。
+     我们自己有 BACK 确认卡，页面这个返回既没用又毁画面（用户实测反馈）。
+     按经验教训 3 的思路按「内容+位置+尺寸」识别，不硬编码站点类名：
+     文本恰为「返回/×返回/Back」、自身很小、位于视口左上区域 —— 三条都满足才收。
+     每 5 个 tick 跑一次（tickBody 高频，querySelectorAll 全树扫不能每秒来）。 */
+  function hideBackBadge() {
+    try {
+      var all = document.querySelectorAll("body *");
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        if (el.__wvtBackHidden) continue;
+        /* ★ 用 innerText（只算可见文本）：textContent 会把 aria/隐藏层文案也
+           算进来，长度直接超限 —— v2.10.8 首版实测「返回」两字永远匹配不上 */
+        var txt = (el.innerText || "").replace(/\s+/g, "");
+        if (!txt || txt.length > 4) continue;
+        if (txt.indexOf("返回") < 0 && txt.toLowerCase() !== "back" && txt !== "×") continue;
+        var r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0 || r.width > 160 || r.height > 70) continue;
+        if (r.left > window.innerWidth * 0.35 || r.top > window.innerHeight * 0.35) continue;
+        el.style.setProperty("display", "none", "important");
+        el.__wvtBackHidden = 1;
+        log("已隐藏官方页返回角标：" + (el.className || el.tagName) + " <" + txt + ">");
+      }
+    } catch (e) { log("hideBackBadge 异常（吞掉）：" + (e && e.message)); }
+  }
+
   function tick() {
     /* ★ 整体兜底：tick 里任何一步抛异常都不能断掉轮询链 —— 链一断，
        「报失败 → 换线路」永远不会发生，用户只能对着黑屏干等
@@ -566,6 +592,7 @@
 
   function tickBody() {
     tries++;
+    if (tries % 5 === 1) hideBackBadge();
     if (!video) {
       video = pickVideo();
       if (video) { setupVideo(video); fill(); }

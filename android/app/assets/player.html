@@ -46,6 +46,9 @@
     background-attachment:fixed;color:var(--fg);overflow:hidden;letter-spacing:.01em;
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
     -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+  /* ★ 全局禁文本选择（v2.10.8）：长按唤浮层的手势会连带触发 WebView 文本选择，
+     弹出系统「复制/分享/全选」气泡，遮挡频道列表（模拟器实测踩到）。 */
+  *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
 
   /* v2.10.7：旧列表页（顶栏/搜索/源切换条/分类/频道网格）已整体退役，
      相关 DOM、JS 与样式全部移除；换台走 #chOv 浮层，源切换走浮层顶部 .sopt。 */
@@ -75,12 +78,25 @@
   #vwrap::after{content:"";position:absolute;inset:0;pointer-events:none;
     box-shadow:inset 0 0 60px rgba(0,0,0,.6);}
   video{width:100%;height:100%;background:#000;display:block;object-fit:contain;}
-  #status{margin:auto;color:#e6e9f0;font-size:14px;font-weight:500;text-align:center;padding:0 30px;
-    position:absolute;left:0;right:0;top:42%;text-shadow:0 2px 12px rgba(0,0,0,.8);pointer-events:none;}
-  /* 连接中的小转圈：让「正在连线路」看起来是在动，而不是卡住 */
-  #status .sp{display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:-1px;
-    border:2px solid rgba(255,255,255,.22);border-top-color:var(--brand);border-radius:50%;
-    animation:spin .9s linear infinite;}
+  /* ★ v2.10.8 状态页（参考 WebViewTV 的「黑底信息渐进」美学）：
+     不再是状态文字条，而是整屏黑底频道页 —— 大号频道号 + 频道名 + 渐进状态行 +
+     底部品牌字。视频首帧出来后整层 0.45s 淡出，视觉主线「黑底不动、文字更新、
+     画面淡入」，消灭「转圈→播放图标→视频」的状态跳变。 */
+  #status{position:fixed;inset:0;z-index:600;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:16px;background:#000;opacity:1;
+    transition:opacity .45s var(--ease);pointer-events:none;}
+  #status.hide{opacity:0;}
+  #status .chno{font-size:72px;font-weight:800;color:#fff;line-height:1;
+    font-variant-numeric:tabular-nums;letter-spacing:.02em;
+    text-shadow:0 6px 40px rgba(255,45,85,.35);}
+  #status .chname{font-size:24px;font-weight:600;color:#e6e9f0;letter-spacing:.02em;}
+  #status .sub{display:flex;align-items:center;gap:8px;font-size:13px;
+    color:var(--fg-mute);margin-top:6px;}
+  #status .sp{display:inline-block;width:11px;height:11px;
+    border:2px solid rgba(255,255,255,.2);border-top-color:var(--brand);
+    border-radius:50%;animation:spin .9s linear infinite;}
+  #status .foot{position:absolute;bottom:6%;font-size:11px;
+    color:rgba(255,255,255,.25);letter-spacing:.14em;}
 
   /* ================= 手机全屏模式（点「全屏」后） =================
      视频铺满 100% 屏高，控制条分上下两栏（电视家风格）：顶部返回+标题，底部功能钮。 */
@@ -146,7 +162,8 @@
   body.frame-on #vwrap, body.native-on #vwrap{background:transparent;}
   /* <video> 默认自带 #000 底 —— 保帧模式下必须也透明，否则它会盖住下面的帧 */
   body.frame-on #vwrap video, body.native-on #vwrap video{background:transparent;}
-  body.frame-on #status, body.native-on #status{color:#e6e9f0;}
+  /* 保帧/原生模式：FrozenFrame 在底下透出来，状态层必须变透明（只留文字） */
+  body.frame-on #status, body.native-on #status{background:transparent;}
   body.native-on #vwrap{visibility:hidden;}
 
   /* 线路选择弹层（电视家风格：底部滑出面板） */
@@ -200,7 +217,9 @@
   body.tv #player{display:none;}
   body.tv #player.show{display:block;}
   body.tv #vwrap{position:absolute;inset:0;height:100%;aspect-ratio:auto;}
-  body.tv #status{top:44%;font-size:22px;}
+  body.tv #status .chno{font-size:120px;}
+  body.tv #status .chname{font-size:36px;}
+  body.tv #status .sub{font-size:19px;}
   body.tv #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;border-top:none;
     background:transparent;pointer-events:none;}
   body.tv #ctrl.hide .ctlbar{opacity:0;pointer-events:none;}
@@ -291,8 +310,20 @@
      全屏播放为主界面；长按中间往右滑 = 频道列表浮层，往左滑 = 设置浮层。
      浮层盖在播放画面上（半透明黑 + blur），播放不中断；BACK 关浮层。
      ========================================================================*/
-  /* ★ v2.10.6：底色调到 .42 —— 本机源是原生硬解，视频在 WebView 底下全亮度渲染，
-     0.66 会把视频压得看不清；0.42 能透出画面，文字靠 text-shadow 保证可读 */
+  /* ★ v2.10.8：面板侧加深 + 视频侧渐透 —— 参考 WebViewTV 设置面板的「半屏暗渐变」：
+     列表所在一侧文字清晰可读，另一侧尽量透出画面。 */
+  .ov{position:absolute;inset:0;z-index:6;display:none;background:rgba(0,0,0,.42);
+    animation:layerIn .2s var(--ease);}
+  /* ★ v2.10.8：频道列表改「左侧挂板」——列表收进左边一块面板（手机 62% 宽 / TV 52%），
+     右侧大半屏完全透出视频；点视频区任意空白即关闭（比全屏浮层的「空白」大得多）。
+     参考 WebViewTV 设置面板的停靠式布局。 */
+  #chOv{background:transparent;}
+  #chOv > #chOvSrc{width:min(440px,64%);
+    background:linear-gradient(180deg,rgba(9,10,16,.94),rgba(9,10,16,.88));}
+  #chOv > .ovbody{width:min(440px,64%);
+    background:linear-gradient(180deg,rgba(9,10,16,.88),rgba(9,10,16,.94));
+    border-right:1px solid rgba(255,255,255,.09);
+    box-shadow:8px 0 40px rgba(0,0,0,.45);}
   .ov{position:absolute;inset:0;z-index:6;display:none;background:rgba(0,0,0,.42);
     animation:layerIn .2s var(--ease);}
   .ov.show{display:flex;}
@@ -314,20 +345,26 @@
     border-right:1px solid rgba(255,255,255,.08);scrollbar-width:none;}
   #chOv .cats::-webkit-scrollbar{display:none;}
   #chOv .cat{padding:8px 12px;font-size:13px;color:var(--fg-dim);cursor:pointer;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    border-left:2px solid transparent;}
   #chOv .cat:active{background:rgba(255,255,255,.08);}
-  #chOv .cat.on{background:var(--brand-grad);color:#fff;font-weight:600;}
+  #chOv .cat.on{background:rgba(255,45,85,.18);color:#fff;font-weight:600;
+    border-left-color:var(--brand);}
   #chOv .cat:focus,#chOv .chi:focus,#setOv .opt:focus{outline:none;
     background:rgba(255,255,255,.12);box-shadow:var(--glow);}
   #chOv .chs{flex:1;overflow:auto;padding:6px 8px;scrollbar-width:none;}
   #chOv .chs::-webkit-scrollbar{display:none;}
-  #chOv .chi{display:flex;gap:8px;padding:6px 10px;font-size:13.5px;color:var(--fg);
-    cursor:pointer;border-radius:var(--r-sm);align-items:center;}
+  #chOv .chi{display:flex;gap:8px;padding:7px 14px;margin:3px 6px;font-size:13.5px;color:var(--fg);
+    cursor:pointer;border-radius:999px;align-items:center;background:rgba(255,255,255,.055);
+    border:1px solid rgba(255,255,255,.07);transition:background .15s var(--ease);}
   #chOv .chi .no{color:var(--fg-mute);font-size:11.5px;font-variant-numeric:tabular-nums;
     flex:0 0 26px;text-align:right;}
   #chOv .chi .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  #chOv .chi:active{background:rgba(255,255,255,.1);}
-  #chOv .chi.on{color:var(--gold);font-weight:700;background:rgba(255,197,49,.1);}
+  #chOv .chi:active{background:rgba(255,255,255,.14);}
+  #chOv .chi.on{color:var(--gold);font-weight:700;background:rgba(255,197,49,.14);
+    border-color:rgba(255,197,49,.35);}
+  body.tv #chOv > #chOvSrc,
+  body.tv #chOv > .ovbody{width:min(620px,54%);}
   body.tv #chOv .cats{flex:0 0 230px;}
   body.tv #chOv .cat{font-size:19px;padding:16px 22px;}
   body.tv #chOv .chi{font-size:19px;padding:14px 16px;}
@@ -366,6 +403,15 @@
 <!-- ★ v2.10.6：旧列表页（header + scroller：标题/源切换条/搜索框/分类 tabs/频道网格）
      彻底删除 —— 全屏播放 + 半透明浮层就是唯一界面；「换频道」走 chOv 浮层。 -->
 <div id="webmask"><div class="sp"></div><div id="webmaskTxt">正在打开官方直播页…</div></div>
+<!-- ★ v2.10.8 状态页放 body 层（z600）：#player 是 z50 的层叠上下文，里面的
+     z500 压不过 body 层的 webmask(z400) —— 实测换台时状态页被 webmask 盖住。
+     fixed 全屏黑底频道信息页，首帧后淡出。 -->
+<div id="status">
+  <div class="chno" id="stNo"></div>
+  <div class="chname" id="stName"></div>
+  <div class="sub"><i class="sp"></i><span id="stSub">正在连接…</span></div>
+  <div class="foot">纯净电视 · 无广告直播</div>
+</div>
 
 <div id="player">
   <!-- ★ <video> 的两个属性都别动（v2.9.1 修「退出横屏时闪一下播放器」）：
@@ -380,7 +426,6 @@
        本 App 的播放控制全在自己那套 #ctrl 控制条上（暂停/比例/全屏/线路），
        从来不需要浏览器原生控件。 -->
   <div id="vwrap"><video id="v" poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" playsinline webkit-playsinline preload="auto" x5-video-player-type="h5-page" tabindex="0"></video></div>
-  <div id="status">正在解析线路…</div>
   <div id="ctrl">
     <!-- 顶部栏：频道名 + 收藏（v2.10.1：「返回」按钮移除 —— 全屏播放为主界面，
          没有可「返回」的列表页；退出统一走 BACK 的确认退出卡） -->
@@ -592,13 +637,24 @@ function hideErrCard(){
   var c = $("errCard"); if(c) c.classList.remove("show");
 }
 
-/* 播放层状态行：busy=true 时带转圈，让「正在连线路」看得出在动 */
+/* 播放层状态页（v2.10.8）：黑底整屏「频道号 + 频道名 + 渐进状态行」。
+   首帧出来后 hideStatus() 淡出（.45s），不再瞬间跳变。
+   busy=true 时状态行带小转圈（只在这一行，不再有整屏大转圈/播放图标）。 */
 function setStatus(t, busy){
   var s=$("status"); if(!s) return;
-  if(t == null){ s.style.display="none"; return; }
-  s.style.display="block";
-  s.innerHTML = (busy ? '<i class="sp"></i>' : '') + '<span></span>';
-  s.querySelector("span").textContent = t;
+  if(t == null){ hideStatus(); return; }
+  s.classList.remove("hide");
+  var sub=s.querySelector("#stSub"); if(sub) sub.textContent = t;
+  var sp=s.querySelector(".sp"); if(sp) sp.style.display = busy ? "inline-block" : "none";
+}
+function hideStatus(){
+  var s=$("status"); if(s) s.classList.add("hide");
+}
+/* 频道信息页抬头：大号频道号 + 频道名（参考 WebViewTV 的「01 湖南卫视」排版） */
+function setStChannel(no, name){
+  var n=$("stNo"), m=$("stName");
+  if(n) n.textContent = no || "";
+  if(m) m.textContent = name || "";
 }
 function logoSrc(n){ return C.logoSrc(n, window.LOGOS); }
 function favArr(){ return C.favArr(); }
@@ -696,7 +752,17 @@ function openChannel(tid, id, name){
      竖屏手机屏宽有限，横屏才能让 16:9 视频真正铺满可视面积。
      TV（IS_TV）本身就横屏，不需要切。 */
   if(!IS_TV && window.NativeTV && NativeTV.setLandscape) setFsMode(true);
-  setStatus("正在解析线路…", true);
+  /* ★ v2.10.8：状态页抬头 —— 大号频道号 + 频道名（参考 WebViewTV 排版）。
+     频道号取当前清单里的序号（1 起，两位补零）；找不到就不显示号。 */
+  (function(){
+    var no="";
+    try{
+      var arr=(window.RENDER && RENDER.arr)||[];
+      for(var z=0;z<arr.length;z++){ if(String(arr[z].id)===String(id)){ no=("0"+(z+1)).slice(-2); break; } }
+    }catch(e){}
+    setStChannel(no, name);
+  })();
+  setStatus("正在连接…", true);
   $("lineGrid").innerHTML="";
   /* ★ 官网源：线路表本地就有，不需要请求接口，也不需要测速 */
   if(tid==="wvt"){
@@ -919,7 +985,7 @@ NATIVE.ok = hasNative();
 /* 原生「真的活了」的统一处理：收状态行、清重连计数、撤起播看门狗、复位卡顿计时。
    （v2.6 抽出来，是因为「ready / size（非 0x0）/ firstframe」三个信号都要走同一套收尾） */
 function nativeLive(){
-  var s = $("status"); if(s) s.style.display = "none";
+  hideStatus();
   hideErrCard();
   NATIVE.retry = 0;                     /* 连上了就清零重连计数 */
   markFirstFrame();                     /* ★ 出首帧：撤起播看门狗 + 清自动跳台计数 */
@@ -1020,7 +1086,7 @@ function armStartWatch(){
   }, startWatchMs());
 }
 /* 出首帧了 —— 撤看门狗，并把「连续自动跳台」计数清零（能起播就说明源没问题） */
-function markFirstFrame(){ NATIVE.firstFrame = true; clearStartWatch(); __autoHopN = 0; }
+function markFirstFrame(){ NATIVE.firstFrame = true; clearStartWatch(); __autoHopN = 0; hideStatus(); }
 
 /* 原生看护：定期读播放器统计，长时间零推进判定为卡死 → 切下一条线路。
    ★ 只管「起播之后」（v2.6）：起播阶段 pos 一直是 0，如果不加 firstFrame 闸门，
@@ -1371,6 +1437,10 @@ function playWebLine(url, i){
     if(webState !== 2) webState = 1;         /* 2 = 正在自动切线路，保留原状态 */
     window.__userExit = false;               /* ★ 新开一页：清掉上一轮的「用户退出」标志 */
     $("webmask").classList.add("show");
+    /* ★ v2.10.8：状态页统一接管加载期视觉（z500 盖住 webmask）——
+       频道号 + 频道名 + 渐进状态行，黑底无转圈海报。webmask 留着是
+       桌面端/无原生页环境的兜底，安卓端永远被 status 盖在上面。 */
+    setStatus("正在打开官方直播页…（第"+(i+1)+"条线路）", true);
     $("webmaskTxt").textContent = "正在打开官方直播页…（第"+(i+1)+"条线路）";
     try{ NativeTV.openPage(url, JSON.stringify(ad), extra); }
     catch(e){
@@ -1547,23 +1617,24 @@ function showWebDeadCard(){
   showErrCard(opts);
 }
 window.__onWebPageReady = function(){
-  /* ★ 文档加载完 ≠ 起播。官网页的播放器还要拉流、起 MSE，
-     这期间站点自己会画「加载中 / 大播放按钮 / 错误提示」一堆浮层。
-     所以遮罩先留着，等注入脚本报 playing 或 failed 再收 —— 否则用户会
-     看到站点的播放按钮，误以为我们的播放器坏了。 */
+  /* ★ 文档加载完 ≠ 起播。官网页的播放器还要拉流、起 MSE。
+     v2.10.8：pageView 起播前压黑（原生侧），用户看的是 #status 频道信息页 ——
+     这里把状态行推进一格，让等待过程有清晰的阶段感。 */
   if(webState === 0) webState = 1;
-  if($("webmask").classList.contains("show")){
-    $("webmaskTxt").textContent = "正在起播…（第"+(cur.idx+1)+"条线路）";
-  }
+  setStatus("页面已就绪，正在拉起播放…", true);
   maybeArmSniffCut();     /* v2.9：提取结果可能早于本回调到达，这里补一次布防 */
 };
 window.__onWebPagePlaying = function(){
+  /* ★ v2.10.8：换台拆页竞态守卫 —— closePage 延迟 150ms 才拆旧官方页，
+     这期间旧页的注入 tick 还在报 playing，会把刚亮出来的状态页 hideStatus()
+     掉（实测换台后只见 webmask 转圈、频道号不显示）。换台标记期内直接早退。 */
+  if(window.__pageSwap){ return; }
   webState = 1;
   window.__lastReason = "";
   markFirstFrame();                 /* 官网页起播也算出首帧：撤看门狗 + 清自动跳台计数 */
   $("webmask").classList.remove("show");
   hideErrCard();
-  $("status").style.display="none";
+  hideStatus();
   maybeArmSniffCut();     /* v2.9：真起播了，安排优选切换 */
 };
 /* 注入脚本判定这条线路起不来（站点提示了原因，或迟迟没有画面）：自动换下一条。
@@ -1589,6 +1660,7 @@ window.__onWebPageFailed = function(reason){
     webState = 2;
     toast("第"+(cur.idx+1)+"条线路无法播放"+why+"，自动切换", {type:"warn"});
     $("webmask").classList.add("show");
+    setStatus(reason ? "这条线路不支持：换下一条…" : "正在尝试第"+(cur.idx+2)+"条线路…", true);
     $("webmaskTxt").textContent = reason ? reason+"，换下一条…" : "正在尝试第"+(cur.idx+2)+"条线路…";
     playIdx(cur.idx+1);            /* 复用同一个 WebView 换地址，不拆页面 */
   } else {
@@ -1632,7 +1704,7 @@ function playSoft(i){
   try{
     player=mpegts.createPlayer({type:"flv", isLive:true, url:url, cors:true}, mpegtsCfg());
   }catch(e){ nextLine(); return; }
-  v.onplaying=function(){ stall.n=0; stall.t=Date.now(); $("status").style.display="none"; markFirstFrame(); };
+  v.onplaying=function(){ stall.n=0; stall.t=Date.now(); hideStatus(); markFirstFrame(); };
   v.onended=function(){ nextLine(); };
   v.onerror=function(){ nextLine(); };
   bindStallWatch(v);
@@ -1756,6 +1828,9 @@ function closePlayer(){
     try{ window.dispatchEvent(new Event("resize")); }catch(e){}
   }, 400);
   webState = 0;
+  /* ★ status 已移出 #player 到 body 层（z600），不再随 player 隐藏而消失，
+     退出播放时必须主动收掉，否则回到列表页后会残留状态页。 */
+  hideStatus();
   window.__lastReason = "";
   hideErrCard();
   try{ if(window.NativeTV && NativeTV.closePage) NativeTV.closePage(); }catch(e){}

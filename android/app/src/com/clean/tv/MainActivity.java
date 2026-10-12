@@ -439,6 +439,7 @@ public class MainActivity extends Activity {
                     pagePlayingSeen = true;     // 已起播：看门狗收兵
                     pageFailedSent = false;      // 已起播：允许下次超时再触发
                     applyOrientation(true);
+                    fadeInPage();                // ★ v2.10.8：起播了才让官方页见光（淡入接画面）
                     try {
                         web.evaluateJavascript(
                             "window.__onWebPagePlaying&&window.__onWebPagePlaying()", null);
@@ -807,8 +808,33 @@ public class MainActivity extends Activity {
         }
         v.bringToFront();
         v.loadUrl(url);
+        /* ★ v2.10.8 过渡：官方页先压在黑底下面（alpha 0）。页面从加载→白底渲染→
+           自家转圈→未起播海报（大播放键 + 「× 返回」）这一整段丑态全部不见天日，
+           用户看到的是网页层的黑底频道信息页（player.html #status）。
+           淡入时机（二选一先到）：
+             a) 注入脚本报 playing（reportPlaying，见下）→ 立刻淡入，直接接画面；
+             b) 20s 兜底 → 也淡入，别让用户干看黑屏（40s 看门狗照旧判死换线）。 */
+        try { v.setAlpha(0f); } catch (Throwable t) {}
+        final int fseq = pageSeq;
+        root.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (fseq != pageSeq || pagePlayingSeen) return;   // 已换页/已起播
+                fadeInPage();
+            }
+        }, 20000);
         applyOrientation(true);
         armPageWatchdog();
+    }
+
+    /** 官网页淡入（v2.10.8）：页面层从黑底信息页平滑过渡到官方页画面。 */
+    private void fadeInPage() {
+        if (pageView == null) return;
+        try {
+            if (pageView.getAlpha() >= 1f) return;
+            pageView.animate().alpha(1f).setDuration(450).start();
+        } catch (Throwable ignore) {
+            try { pageView.setAlpha(1f); } catch (Throwable ig) {}
+        }
     }
 
     /**
