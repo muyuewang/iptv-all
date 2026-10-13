@@ -327,9 +327,11 @@
      右侧大半屏完全透出视频；点视频区任意空白即关闭（比全屏浮层的「空白」大得多）。
      参考 WebViewTV 设置面板的停靠式布局。 */
   #chOv{background:transparent;}
-  #chOv > #chOvSrc{width:64%;width:min(440px,64%);
+  /* ★ v2.10.18 面板收窄 64%→52%（用户反馈太宽、空白框多易误触；药丸贴内容后
+     窄面板也放得下全名），min-width:300px 保窄竖屏手机 */
+  #chOv > #chOvSrc{width:64%;width:min(440px,52%);min-width:300px;
     background:linear-gradient(180deg,rgba(9,10,16,.94),rgba(9,10,16,.88));}
-  #chOv > .ovbody{width:64%;width:min(440px,64%);
+  #chOv > .ovbody{width:64%;width:min(440px,52%);min-width:300px;
     background:linear-gradient(180deg,rgba(9,10,16,.88),rgba(9,10,16,.94));
     border-right:1px solid rgba(255,255,255,.09);
     box-shadow:8px 0 40px rgba(0,0,0,.45);}
@@ -363,12 +365,23 @@
     background:rgba(255,255,255,.12);box-shadow:var(--glow);}
   #chOv .chs{flex:1;overflow:auto;padding:6px 8px;scrollbar-width:none;}
   #chOv .chs::-webkit-scrollbar{display:none;}
+  /* ★ v2.10.18 手机版药丸收缩到内容宽度：过去 .chi 全宽（flex 容器占满列宽），
+     频道名右侧的「空白」其实还在按钮里，手机一点就换台（用户实测误触）。
+     收缩后空白归浮层背景 → 点它走 ovClickClose 关浮层，所见即所点。
+     超长频道名：药丸自动扩到整列宽（max-width:100%），溢出部分由 JS 加跑马灯
+     循环滚动（用户定稿：不要省略号，全名都要看得到）。
+     TV 版不收（width:auto 恢复全宽 + 省略号）：遥控器焦点导航，无触摸误触。 */
   #chOv .chi{display:flex;gap:8px;padding:7px 14px;margin:3px 6px;font-size:13.5px;color:var(--fg);
     cursor:pointer;border-radius:999px;align-items:center;background:rgba(255,255,255,.055);
-    border:1px solid rgba(255,255,255,.07);transition:background .15s var(--ease);}
+    border:1px solid rgba(255,255,255,.07);transition:background .15s var(--ease);
+    width:-webkit-fit-content;width:fit-content;max-width:100%;overflow:hidden;}
   #chOv .chi .no{color:var(--fg-mute);font-size:11.5px;font-variant-numeric:tabular-nums;
     flex:0 0 26px;text-align:right;}
-  #chOv .chi .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  /* 不收缩 + 不裁切：短名贴内容，长名溢出交给 .chi 裁切。
+     （收缩项会被 fit-content 按 min-content 计入，实测长名 120px 就被截 —— 别用）
+     ★ .nm 右侧 12px 余量：实测 Chromium 对 flex 容器 fit-content 的 intrinsic
+       测量比文字真实渲染宽度窄 ~10px，不补的话短名也会被裁掉一截。 */
+  #chOv .chi .nm{flex:0 0 auto;margin-right:12px;white-space:nowrap;}
   #chOv .chi:active{background:rgba(255,255,255,.14);}
   #chOv .chi.on{color:var(--gold);font-weight:700;background:rgba(255,197,49,.14);
     border-color:rgba(255,197,49,.35);}
@@ -376,7 +389,8 @@
   body.tv #chOv > .ovbody{width:54%;width:min(620px,54%);}
   body.tv #chOv .cats{flex:0 0 230px;}
   body.tv #chOv .cat{font-size:19px;padding:16px 22px;}
-  body.tv #chOv .chi{font-size:19px;padding:14px 16px;}
+  body.tv #chOv .chi{font-size:19px;padding:14px 16px;width:auto;max-width:none;overflow:visible;}
+  body.tv #chOv .chi .nm{flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;}
   /* 设置：右侧半透明面板 */
   #setOv{justify-content:flex-end;}
   #setOv .panel{width:82%;width:min(330px,82%);height:100%;background:rgba(10,11,15,.8);
