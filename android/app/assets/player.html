@@ -1028,6 +1028,15 @@ window.__onNativeState = function(state, detail){
       setStatus("线路"+(cur.idx+1)+"分片异常，跳到直播位置重试…", true);
       NATIVE.stallN = 0; NATIVE.stallT = Date.now();
     } else if(state === "error"){
+      /* ★ v2.10.15 直连缓存尝试中报 error：URL 已失效（token 过期/站点改版）——
+         软解同一条 URL 也是死路，直接删缓存回退原网页链路，不走下面的换软解。
+         （extcFail 自己清 trying/定时器；nativeStop 已把 active 置 false，
+          回退期间迟到的回调都会被函数开头 !NATIVE.active 挡住，无竞态。） */
+      if(EXTC.trying){
+        NATIVE.active = false;
+        setTimeout(function(){ extcFail(); }, 200);
+        return;
+      }
       /* ★ 换内核重播同一条 URL —— 「第 1 级兜底」（v2.7）
          判据来自 TVBoxOS 的 switchLivePlayerAndReplay（LivePlayActivity.java:2327-2343）：
          **「这个解码器解不了」≠「这条线路不通」**。换内核比换线路便宜得多
@@ -1075,7 +1084,14 @@ function armStartWatch(){
   }, startWatchMs());
 }
 /* 出首帧了 —— 撤看门狗，并把「连续自动跳台」计数清零（能起播就说明源没问题） */
-function markFirstFrame(){ NATIVE.firstFrame = true; clearStartWatch(); __autoHopN = 0; hideStatus(); }
+function markFirstFrame(){
+  NATIVE.firstFrame = true; clearStartWatch(); __autoHopN = 0; hideStatus();
+  /* ★ v2.10.15 直连缓存：首帧确认 → 撤快速回退定时器 + 给缓存续命 */
+  if(EXTC.trying){
+    EXTC.trying = false; clearTimeout(EXTC.t); EXTC.t = null; EXTC.webUrl = "";
+    try{ extCacheTouch(cur.id, cur.idx); }catch(e){}
+  }
+}
 
 /* 原生看护：定期读播放器统计，长时间零推进判定为卡死 → 切下一条线路。
    ★ 只管「起播之后」（v2.6）：起播阶段 pos 一直是 0，如果不加 firstFrame 闸门，
@@ -1386,6 +1402,7 @@ function playIdx(i){
      各自查过闸门，这里是最后一道，防止以后新增异步调用点时漏掉。 */
   if(__sessionClosed) return;
   clearSniffCut();     /* ★ 换线路：撤掉上一条线路的「提取优选切换」延时器（v2.9） */
+  extcAbort();         /* ★ v2.10.15：上一台若还在直连缓存尝试，静默终止（新起播接管） */
   cur.idx=i; setLineUI();
   var url=cur.urls[i]; if(!url) return;
   /* 起播前恢复 WebView 媒体处理（closePlayer 时被 pauseWebMedia 暂停过） */
@@ -1414,9 +1431,97 @@ function playIdx(i){
   playSoft(i);
 }
 
+/* ==================== 直链缓存直连（v2.10.15） ====================
+   网页线路起播 10-20s 的大头是「打开官方页→站点自己的重页面+广告脚本→软解出画」。
+   而提取链（SNIFF）成功后拿到的直链其实还能用很久（白名单站点 token 一般 30min+）。
+   做法：playSniffed 切原生成功时把 {频道,线路→直链+headers} 存进 localStorage；
+   下次再播同一台·同一条线路，先直接让 ExoPlayer 放缓存直链（1-3s 起播），
+   4.5s 内没出首帧或报 error → 删缓存、自动回退原网页链路。全程零 Java 改动。
+   ★ 只对 SNIFF_SAFE 白名单域生效（与优选切换同一份安全名单，央视系加扰流进不来）。 */
+var EXTC = { trying:false, t:null, key:"", webUrl:"" };
+function extCacheAll(){
+  try{ return JSON.parse(localStorage.getItem("tv_ext_cache") || "{}"); }catch(e){ return {}; }
+}
+function extCacheSave(all){
+  try{ localStorage.setItem("tv_ext_cache", JSON.stringify(all)); }catch(e){}
+}
+function extCachePut(chId, i, j){
+  try{
+    if(!j || !j.url) return;
+    var all = extCacheAll();
+    all["ext|"+chId+"|"+i] = { u: j.url, h: j.headers || {}, t: Date.now() };
+    var ks = Object.keys(all);
+    if(ks.length > 12){                       /* 上限 12 条，LRU 淘汰 */
+      ks.sort(function(a,b){ return (all[a].t||0) - (all[b].t||0); });
+      while(ks.length > 12) delete all[ks.shift()];
+    }
+    extCacheSave(all);
+  }catch(e){}
+}
+function extCacheGet(chId, i){
+  try{
+    var e = extCacheAll()["ext|"+chId+"|"+i];
+    if(!e || !e.u) return null;
+    if(Date.now() - e.t > 1800000) return null;   /* TTL 30min：token 过期由失败淘汰兜底 */
+    return e;
+  }catch(e2){ return null; }
+}
+function extCacheDel(chId, i){
+  try{ var all = extCacheAll(); delete all["ext|"+chId+"|"+i]; extCacheSave(all); }catch(e){}
+}
+function extCacheTouch(chId, i){
+  try{ var all = extCacheAll(), e = all["ext|"+chId+"|"+i];
+       if(e){ e.t = Date.now(); extCacheSave(all); } }catch(e){}
+}
+/* 直连失败/换台清理：删缓存 + 回退原网页链路（playWebLine 自带 __sessionClosed 闸门） */
+function extcFail(){
+  if(!EXTC.trying) return;
+  EXTC.trying = false;
+  clearTimeout(EXTC.t); EXTC.t = null;
+  clearStartWatch();                 /* 网页链路走页面自己的看门狗，原生起播看门狗必须撤 */
+  try{ extCacheDel(cur.id, cur.idx); }catch(e){}
+  var wu = EXTC.webUrl; EXTC.webUrl = "";
+  if(__sessionClosed || !wu) return;
+  playWebLine(wu, cur.idx);
+}
+/* 换台/换线/关播时静默复位直连尝试（不删缓存、不回退）——新的起播马上接管 */
+function extcAbort(){
+  if(!EXTC.trying) return;
+  EXTC.trying = false;
+  clearTimeout(EXTC.t); EXTC.t = null;
+  EXTC.webUrl = "";
+  clearStartWatch();
+}
+
 /* 官网源 · 网页线路：让原生开一个全屏 WebView 加载官方页面并注入取流脚本 */
 function playWebLine(url, i){
   if(__sessionClosed) return;    /* 同 playSoft：挡住卸载后的延时重连 */
+  /* ★ v2.10.15 直链缓存直连：这台·这条线路 30min 内提取成功过 → 跳过整个官方页，
+     直接原生放缓存直链。失败由 extcFail 回退到这里再走网页（缓存已删）。 */
+  if(window.NativeTV && NativeTV.nativePlayExt && SNIFF.on){
+    var ec = extCacheGet(cur.id, i);
+    if(ec && sniffIsSafe(ec.u)){
+      nativeStop();
+      if(player){ try{player.destroy();}catch(e){} player=null; }
+      var ve=$("v"); try{ ve.pause(); ve.removeAttribute("src"); ve.load(); }catch(e){}
+      if(webState !== 2) webState = 1;
+      window.__userExit = false;
+      EXTC.trying = true; EXTC.key = cur.id+"|"+i; EXTC.webUrl = url;
+      setStatus("正在连接…（直连缓存）", true);
+      armStartWatch();
+      EXTC.t = setTimeout(function(){       /* 快速回退：网页链路至少还要再花 8s，别陪它等满 10s */
+        if(__sessionClosed || !EXTC.trying) return;
+        if(NATIVE.firstFrame) return;       /* 竞态兜底：首帧刚到 */
+        if((cur.id+"|"+cur.idx) !== EXTC.key) return;   /* 已换台：旧尝试作废 */
+        toast("直连缓存失效，改走官方页…", {type:"info"});
+        extcFail();
+      }, 4500);
+      if(playNative(ec.u, ec.h || {})) return;
+      /* playNative 本身失败（桥不可用等）：清状态走原网页流程 */
+      EXTC.trying = false; clearTimeout(EXTC.t); EXTC.t = null;
+      clearStartWatch();
+    }
+  }
   nativeStop();
   if(player){ try{player.destroy();}catch(e){} player=null; }
   var v=$("v"); try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
@@ -1550,6 +1655,8 @@ function playSniffed(){
     armStartWatch();
     if(playNative(j.url, j.headers || {})){
       toast("官网线路已切原生硬解", {type:"info"});
+      /* ★ v2.10.15 直链缓存直连：这台·这条线路的直链记下来，下次直接原生播（1-3s） */
+      try{ extCachePut(cur.id, cur.idx, j); }catch(e){}
     }
   }, 320);      /* > hidePage 的 150ms，等 pageView 真拆完再起原生 */
   return true;
@@ -1788,6 +1895,7 @@ function closePlayer(){
   clearTimeout(stall.timer);
   clearStartWatch();            /* ★ 起播看门狗：退出播放层就不该再计时换线 */
   clearSniffCut();              /* ★ 提取优选切换的延时器（v2.9） */
+  extcAbort();                  /* ★ v2.10.15：直连缓存尝试随会话一起终止 */
   stopStatWatch();              /* ★ 播放信息角标：退出播放层停止刷新（v2.8） */
   __autoHopN = 0;               /* 自动跳台计数复位（下次开台重新开始数） */
   if(player){ try{player.destroy();}catch(e){} player=null; }
