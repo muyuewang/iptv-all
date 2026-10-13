@@ -328,10 +328,19 @@
      参考 WebViewTV 设置面板的停靠式布局。 */
   #chOv{background:transparent;}
   /* ★ v2.10.18 面板收窄 64%→52%（用户反馈太宽、空白框多易误触；药丸贴内容后
-     窄面板也放得下全名），min-width:300px 保窄竖屏手机 */
-  #chOv > #chOvSrc{width:64%;width:min(440px,52%);min-width:300px;
+     窄面板也放得下全名），min-width:300px 保窄竖屏手机。
+     ★ v2.10.28 用户定稿：改「按内容定宽」，不再吃 52% 的百分比宽度。
+     实测（tools/_probe_chwidth.py --need，遍历两源 58 组 2000+ 个频道）：
+       手机布局最长名「CCTV-4 中文国际（欧洲）」文字排完要到 269 css，加上行尾
+       .chs padding-right 8 + .chi margin-right 4 + .chi padding-right 10 = 22 css
+       → 面板 291 才不截断；52% 在 640 视口是 333，每条行尾白扔 42 css 空带。
+       TV 大字（19px）实测需 379（原 620 白扔 240 css）。
+     取 300 / 400（各留 ~20、~21 css 余量），编号列 + 名字基本贴到右边界。
+     首个 `width:296px` 是不认 min() 的老 WebView 兜底（原来兜底写 64%，
+     老引擎会拿到 410 css 的老样子）。 */
+  #chOv > #chOvSrc{width:296px;width:min(300px,52%);min-width:296px;
     background:linear-gradient(180deg,rgba(9,10,16,.94),rgba(9,10,16,.88));}
-  #chOv > .ovbody{width:64%;width:min(440px,52%);min-width:300px;
+  #chOv > .ovbody{width:296px;width:min(300px,52%);min-width:296px;
     background:linear-gradient(180deg,rgba(9,10,16,.88),rgba(9,10,16,.94));
     border-right:1px solid rgba(255,255,255,.09);
     box-shadow:8px 0 40px rgba(0,0,0,.45);}
@@ -384,7 +393,7 @@
   #chOv .chi:active{color:#fff;}
   #chOv .chi.on{color:var(--gold);font-weight:700;}
   body.tv #chOv > #chOvSrc,
-  body.tv #chOv > .ovbody{width:54%;width:min(620px,54%);}
+  body.tv #chOv > .ovbody{width:54%;width:min(400px,54%);}   /* v2.10.28：620→400（按内容实测 379） */
   /* ★ v2.10.19：TV 分组列同样贴内容（原 230px 固定宽装 2~4 字分组名，
      右侧一大条空白就是用户圈的「中间这块」）；药丸与手机统一贴内容。 */
   body.tv #chOv .cats{flex:0 0 auto;width:-webkit-fit-content;width:fit-content;
