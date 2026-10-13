@@ -184,6 +184,9 @@ public class MainActivity extends Activity {
     private volatile int sniffTries = 0;
     /** 本页是否已有可播结论（或已判死）—— 有就收工，不再看后续 m3u8 */
     private volatile boolean sniffDone = false;
+    /** ★ v2.10.23 已做过「提前注入」的页号（= pageSeq）。进度 25% 先打一次
+        注入脚本，避免同一页在加载过程中重复注入。 */
+    private volatile int pageInjectedSeq = -1;
 
     /** 桌面 / 移动两套 UA —— 适配规则里的 ua 字段决定用哪套 */
     private static final String UA_PC =
@@ -836,6 +839,18 @@ public class MainActivity extends Activity {
                     String u = view.getUrl();
                     if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
                 } catch (Throwable t) {}
+                /* ★ v2.10.23 提前注入：过去只在 onPageFinished 打脚本，实测重站点
+                   要 1.3~1.5s 才 finished，注入脚本再花 ~0.9s 摸到 <video>，官方页
+                   自己起播也被拖在这后面。wvt_inject.js 本身就是「轮询等 <video>
+                   + 钉全屏 + 自动起播」的自适应逻辑，其文件头注释写明它是按
+                   document-start 设计（DOM 没成形照样跑），所以进度 25% 时
+                   （文档头已就绪、body 还没下完）就可以先打上去。
+                   注入脚本自带 __wvtInjected 幂等守卫，重复注入只会走 wvt_resume；
+                   onPageFinished 与 p==100 仍各补一次（SPA 站换 <video> 时用）。 */
+                if (p >= 25 && pageInjectedSeq != pageSeq) {
+                    pageInjectedSeq = pageSeq;      /* 本页只提前注入一次 */
+                    injectIntoPage(view);
+                }
                 if (p == 100) injectIntoPage(view);
             }
             @Override
