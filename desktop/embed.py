@@ -455,6 +455,27 @@ class EmbeddedBrowser:
             raise box["err"]
         return bool(box.get("ret"))
 
+    def warmup(self, host_hwnd, w, h):
+        """预热：提前把 WebView2 环境/控件建好，停在 about:blank，并先隐藏。
+
+        首次创建要加载 WebView2Loader.dll、拉起 Edge 进程、建环境 —— 实测
+        1~2 秒，全落在用户点频道之后。启动空转时先付掉这笔钱，点频道时
+        直接导航官方页，省下这段等待。任意线程可调（阻塞到完成，返回 bool）。
+        """
+        if not IS_WIN or self._closed:
+            return False
+        self.host_hwnd = host_hwnd
+        self.size = (max(2, int(w)), max(2, int(h)))
+        self._nav_gen += 1
+        gen = self._nav_gen
+        box, ev = {}, threading.Event()
+        job = self._job_warmup(gen)
+        self._start_job(job, ev, box, gen, "warmup")
+        if not self._wait_ev(ev, 30):
+            self.log("warmup 超时（30s）")
+            return False
+        return bool(box.get("ret"))
+
     def state(self):
         """注入脚本自报的状态：'' / playing / failed / closed。任意线程可调。"""
         return self._eval_sync("(window.__wvt_state||'')", timeout=6) or ""
@@ -769,6 +790,26 @@ class EmbeddedBrowser:
         except Exception as e:               # noqa: BLE001
             self.log("导航/注入失败：%r" % (e,))
             return False
+
+    def _job_warmup(self, gen):
+        """生成器：只建环境/控件 + 停在空白页，不碰官方页、不注册注入脚本。"""
+        ok = yield from self._job_ensure(None, gen)
+        if not ok or gen != self._nav_gen:
+            return False
+        try:
+            self._fit_now()
+            if self._core:
+                _vtbl_call(self._core, 5, _FN_NAVIGATE,
+                           c_wchar_p("about:blank"))
+                self.page_url = ""
+            # 立刻藏起来 —— 此刻用户还没点频道，播放区该显示占位提示，
+            # 不能让一块空白 WebView2 盖在上面。_job_play 里会再翻回可见。
+            self._hidden = True
+            self._put_visible(False)
+            self.log("WebView2 预热完成（空白页待命）")
+        except Exception as e:               # noqa: BLE001
+            self.log("预热收尾失败：%r" % (e,))
+        return True
 
     def _job_ensure(self, ua, gen):
         """生成器：保证 env/controller/core 就绪，UA 不同就运行时切换。"""

@@ -158,10 +158,6 @@ GOLD = "#ffc531"
 # 台标缩略尺寸
 LOGO_SIZE = 30
 
-# 官网源分组胶囊区高度（4 行 × 30px + 3 × 6px 间距）—— 51 个分组放不下，
-# 限高后内部滚动；前 12 个分组（广东/四川/河南/山东/卫视/江苏…）始终可见。
-GROUP_BAR_H = 138
-
 
 def badge_color(name):
     """按频道名生成稳定的徽标底色（无台标时用）。"""
@@ -368,10 +364,23 @@ class DropSelect(tk.Canvas):
         self._scroll = 0           # 已滚掉的行数
         self._vis_rows = 0
         self._root_bind = None
+        self._root_cfg = None
         self.bind("<Button-1>", lambda e: self._toggle())
         self.bind("<Motion>", self._hover_on)
         self.bind("<Leave>", self._hover_off)
         self.bind("<Configure>", lambda e: self.redraw())
+        # ★ 常驻监听（v2.10.22 修）：以前是「打开时 bind、关闭时 unbind」，
+        #   而 tkinter 的 unbind(seq) 会把该 sequence 上的**全部**绑定清掉 ——
+        #   一次下拉开合就顺手拆掉了绑在 root <Configure> 上的窗口移动回调，
+        #   拖动/缩放窗口后 WebView2 不再收到 NotifyParentWindowPositionChanged，
+        #   内嵌画面就错位（用户报的「点开播放很丑」根因之一）。
+        #   现在一次绑好、永不 unbind，靠 _pop 是否为 None 自我判断。
+        try:
+            root = self.winfo_toplevel()
+            self._root_bind = root.bind("<Button-1>", self._outside_click, add="+")
+            self._root_cfg = root.bind("<Configure>", self._root_moved, add="+")
+        except Exception:
+            pass
 
     # ---------------- 数据 ----------------
     def set_items(self, items, active=None):
@@ -563,9 +572,8 @@ class DropSelect(tk.Canvas):
             pop.focus_force()
         except Exception:
             pass
-        # 点别处收起 / 主窗口被拖动缩放收起
-        self._root_bind = root.bind("<Button-1>", self._outside_click, add="+")
-        root.bind("<Configure>", self._root_moved, add="+")
+        # 点别处收起 / 主窗口被拖动缩放收起 —— 绑定在 __init__ 里常驻，
+        # 这里不再 bind（更不能在 _close 里 unbind，见 __init__ 的说明）。
         self.redraw()
         self._draw_pop()
 
@@ -573,15 +581,6 @@ class DropSelect(tk.Canvas):
         if self._pop is None:
             return
         pop = self._pop
-        try:
-            self.winfo_toplevel().unbind("<Button-1>", self._root_bind)
-        except Exception:
-            pass
-        try:
-            self.winfo_toplevel().unbind("<Configure>")
-        except Exception:
-            pass
-        self._root_bind = None
         self._pop = self._pop_cv = None
         self._rows = []
         try:
@@ -591,18 +590,11 @@ class DropSelect(tk.Canvas):
         self.redraw()
 
     def _root_moved(self, e):
-        # 主窗口被拖动/缩放时浮层留在原地就成了「贴纸」，直接收起
+        # 主窗口被拖动/缩放时浮层留在原地就成了「贴纸」，直接收起。
+        # （通知 WebView2 父窗口移动的活儿由 NativeApp._on_root_configure 干，
+        #   这里不管 —— 常驻绑定下会被每个 DropSelect 实例各调一次。）
         if self._pop is not None:
             self._close()
-        # WebView2 需要被告知父窗口挪动了（同步它的弹层/下拉位置）。
-        # ★ 本方法同时被 NativeApp 和 DropSelect 绑定到 root <Configure>，
-        #   DropSelect 没有 embed 属性 —— 必须判空，否则每次挪窗口都抛异常。
-        emb = getattr(self, "embed", None)
-        if emb is not None:
-            try:
-                emb.notify_parent_moved()
-            except Exception:
-                pass
 
     def _outside_click(self, e):
         if self._pop is None:
@@ -941,6 +933,7 @@ class NativeApp:
         self.sniff_dir = os.path.join(DATA_DIR, ".sniff")
         self._req = 0                   # 请求代号（防止过期嗅探结果覆盖新选择）
         self._sniff_note = ""
+        self._ext_cache = {}            # "tid/cid/idx" -> (url, headers, ts)
 
         # ---- 内嵌浏览器（官网源网页线路的播放器）----
         self.embed = None
@@ -979,10 +972,52 @@ class NativeApp:
         self._bind_keys()
         self._set_src("wvt")            # 默认官网源（官网源在第一位，v2.4.2）
 
+        # ★ 窗口移动/缩放 → 通知 WebView2「父窗口位置变了」（否则内嵌画面错位）。
+        #   这活儿以前挂在 DropSelect 的 <Configure> 回调上，而那个回调是
+        #   「打开下拉才绑、关闭时 unbind」—— tkinter 的 unbind(seq) 会把
+        #   root 上该事件的全部绑定一起清掉，所以点过一次下拉它就永久失效了。
+        #   现在挂在自己身上，常驻。
+        self.root.bind("<Configure>", self._on_root_configure, add="+")
+
         # 启动跨线程 UI 队列排水器（必须在主线程启动）
         self.root.after(30, self._drain_ui)
 
+        # ★ v2.10.22 WebView2 预热：官网源网页线路第一次播放时，光「创建
+        #   WebView2 环境」就要 1~2 秒（加载 Loader + 拉起 Edge 进程），全砸在
+        #   用户点频道之后。启动空转几秒先把它建好（停在 about:blank 并隐藏），
+        #   点频道时直接导航 —— 与安卓端 v2.10.16 的 pageView 预热同一思路。
+        self.root.after(4000, self._warm_embed)
+
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _warm_embed(self):
+        """后台把内嵌浏览器建好待命（失败就算了，不影响正常播放路径）。"""
+        if self.embed is not None or _embed_mod is None:
+            return
+        try:
+            if _embed_mod.find_browser() is None:
+                return
+        except Exception:
+            return
+        try:
+            self.video_host.update_idletasks()
+            hw = self.video_host.winfo_id()
+            w = max(64, self.video_host.winfo_width())
+            h = max(64, self.video_host.winfo_height())
+        except Exception:
+            return
+        self.embed = _embed_mod.EmbeddedBrowser(
+            DATA_DIR, log=self._log,
+            schedule=lambda ms, fn: self.root.after(int(ms), fn))
+
+        def work():
+            try:
+                if not self.embed.warmup(hw, w, h):
+                    self._log("WebView2 预热未完成（首次点播会稍慢一点）")
+            except Exception as e:          # noqa: BLE001
+                self._log("WebView2 预热异常：%r" % (e,))
+
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------------- 字体 / 主题 ----------------
     def _after_map(self, fn, args=()):
@@ -1107,49 +1142,29 @@ class NativeApp:
         self.filter_slot = tk.Frame(left, bg=BG)
         self.filter_slot.pack(fill="x")
 
-        # 本机源：分类选择器（★ v2.10.21 从下拉改回三列平铺胶囊 —— 用户要
-        #   「平铺胶囊」那种一眼看全、点一下就走的手感，不要藏在下拉里）
+        # 本机源：分类选择器（★ v2.10.22 按用户要求改回**下拉** —— 与官网源的
+        #   「分组」共用同一个 DropSelect，两个模式点上去长得一模一样）
         self.catf = tk.Frame(self.filter_slot, bg=BG)
         self.catf.pack(fill="x", padx=12, pady=(10, 8))
         tk.Label(self.catf, text="分类", bg=BG, fg=FG_MUTE,
-                 font=self.F(9)).pack(anchor="w", pady=(0, 6))
-        self.cat_bar = PillBar(self.catf, cols=3, cell_h=30, gap=6, radius=9,
-                               font=self.F(10), on_pick=self._on_cat_pick)
-        self.cat_bar.pack(fill="x")
+                 font=self.F(9)).pack(side="left", padx=(0, 8))
+        self.cat_bar = DropSelect(self.catf, font=self.F(10), height=36,
+                                  on_pick=self._on_cat_pick)
+        self.cat_bar.pack(side="left", fill="x", expand=True)
 
-        # 官网源：分组选择器（★ 同上改回平铺胶囊。51 个分组平铺约 646px 高，
-        #   会把频道列表挤没 —— 所以限高 4 行、内部滚动，滚轮单独吃）
+        # 官网源：分组选择器（51 个分组，下拉面板自带内部滚动 MAX_ROWS=10）
         self.group_frame = tk.Frame(self.filter_slot, bg=BG)
         gf = tk.Frame(self.group_frame, bg=BG)
-        gf.pack(fill="x", padx=12, pady=(10, 6))
+        gf.pack(fill="x", padx=12, pady=(10, 8))
         tk.Label(gf, text="分组", bg=BG, fg=FG_MUTE,
                  font=self.F(9)).pack(side="left", padx=(0, 8))
+        self.group_cbo = DropSelect(gf, font=self.F(10), height=36,
+                                    on_pick=self._on_group_pick)
+        self.group_cbo.pack(side="left", fill="x", expand=True)
         tk.Button(gf, text="⟳", bg=BG2, fg=FG_DIM, relief="flat", bd=0, padx=8,
                   font=self.F(10), cursor="hand2", activebackground=BRAND,
                   activeforeground="#fff",
-                  command=self._reload_wvt).pack(side="right")
-
-        gwrap = tk.Frame(self.group_frame, bg=BG)
-        gwrap.pack(fill="x", padx=12, pady=(0, 8))
-        gcv = self.group_canvas = tk.Canvas(gwrap, bg=BG, highlightthickness=0,
-                                            height=GROUP_BAR_H)
-        gsb = ttk.Scrollbar(gwrap, orient="vertical",
-                            style="Dark.Vertical.TScrollbar", command=gcv.yview)
-        self.group_cbo = PillBar(gcv, cols=3, cell_h=30, gap=6, radius=9,
-                                 font=self.F(10), on_pick=self._on_group_pick)
-        gwin = gcv.create_window((0, 0), window=self.group_cbo, anchor="nw")
-        gcv.configure(yscrollcommand=gsb.set)
-        # ★ add="+"：PillBar 自己已经绑了 <Configure>→redraw，这里不能用
-        #   默认替换语义，否则它的自适应重绘会被顶掉。
-        self.group_cbo.bind(
-            "<Configure>",
-            lambda e: gcv.configure(scrollregion=gcv.bbox("all")), add="+")
-        gcv.bind("<Configure>", lambda e: gcv.itemconfig(gwin, width=e.width))
-        # 分组区自己的滚轮：必须 return "break"，否则事件会冒泡到全局
-        # bind_all 的频道列表滚轮上（1146 行），变成「滚分组却滚了频道」。
-        gcv.bind("<MouseWheel>", self._on_group_wheel)
-        gcv.pack(side="left", fill="both", expand=True)
-        gsb.pack(side="right", fill="y")
+                  command=self._reload_wvt).pack(side="left", padx=(6, 0))
         self.group_frame.pack_forget()      # 默认本机源：分组行先藏起来
 
         listwrap = tk.Frame(left, bg=BG)
@@ -1310,15 +1325,6 @@ class NativeApp:
 
     def _on_wheel(self, e):
         self.canvas.yview_scroll(int(-e.delta / 120), "units")
-
-    def _on_group_wheel(self, e):
-        """分组胶囊区滚轮：滚自己，并 return "break" 阻止冒泡到频道列表。
-
-        频道列表的滚轮是 bind_all 全局绑的（1146 行），不 break 的话滚分组
-        会把频道列表一起滚走。
-        """
-        self.group_canvas.yview_scroll(int(-e.delta / 120), "units")
-        return "break"
 
     def _on_epg_wheel(self, e):
         self.epg_canvas.xview_scroll(int(-e.delta / 120) * 2, "units")
@@ -1739,11 +1745,25 @@ class NativeApp:
                 self.status_lbl.configure(text="频道信息缺失")
                 self._hide_loading()
                 return
-            self.cur["urls"] = list(ch["urls"])
+            urls = list(ch["urls"])
+            self.cur["urls"] = urls
             self.cur["extra"] = list(ch.get("extra") or [])
             self._render_epg([])
-            self.line_lbl.configure(text="线路 1/%d" % max(1, len(self.cur["urls"])))
-            self._play_idx(0)
+            # ★ v2.10.22 直连流优先：官网源里有 54 个频道同时挂着「网页线路」
+            #   和「直链」。直连结 mpv 秒开；网页线路要等官方页自己起播十几秒
+            #   （央视系还可能因私有加扰永远出不来）。第一条不是直连就先挑直连。
+            start = 0
+            if _wvt is not None:
+                for i, u in enumerate(urls):
+                    try:
+                        if _wvt.is_direct_stream(u):
+                            start = i
+                            break
+                    except Exception:
+                        pass
+            self.line_lbl.configure(
+                text="线路 %d/%d" % (start + 1, max(1, len(urls))))
+            self._play_idx(start)
             return
 
         self.status_lbl.configure(text="正在获取「%s」的线路…" % name)
@@ -1807,6 +1827,16 @@ class NativeApp:
             self._stop_embed(hide=True)
             self.status_lbl.configure(text="直连线路，正在播放…")
             self._start_mpv(url)
+            return
+
+        # ★ v2.10.22 直连缓存：这条线路最近嗅到过真实流地址 → 直接交给 mpv，
+        #   省掉「官方页起播十几秒」或「嗅探二十几秒」整轮（重进同频道秒出画）。
+        hit = self._ext_get(self.cur.get("tid"), self.cur.get("id"), idx)
+        if hit:
+            self._stop_embed(hide=True)
+            self.status_lbl.configure(text="缓存线路，正在播放…")
+            self._log("直连缓存命中: %s" % hit[0][:80])
+            self._start_mpv(hit[0], headers=hit[1])
             return
 
         self._show_web(url, extra)
@@ -1911,12 +1941,19 @@ class NativeApp:
         self._web_watch(seq)
 
     def _web_watch(self, seq):
-        """后台每秒问一次页面：playing / failed / closed（failed 附带原因）。"""
+        """后台问页面状态：playing / failed / closed（failed 附带原因）。
+
+        ★ v2.10.22 提速：起播头 12 秒改成 250ms 一轮，之后回到 1s。
+          原来固定 1s —— 页面自报 playing 之后界面平均还要再等半拍才收掉
+          等待层（实测差 0.5~1s），这是「点了半天才出画」的体感来源之一。
+        """
         emb = self.embed
 
         def loop():
+            t0 = time.time()
+            sniffing = False
             while seq == self._embed_seq:
-                time.sleep(1.0)
+                time.sleep(0.25 if time.time() - t0 < 12 else 1.0)
                 if emb is None or not emb.alive():
                     return
                 try:
@@ -1938,8 +1975,94 @@ class NativeApp:
                         > 35):
                     st, rs = "failed", "页面长时间无响应"
                 self._ui(lambda s=st, r=rs: self._on_web_state(s, seq, r))
+                # ★ v2.10.22 并行兜底：网页已经 6 秒还没出画 → 后台同时开一轮
+                #   嗅探，谁先成功用谁（详见 _sniff_parallel）。
+                #   ★ 用**时间**判断而不是轮次：emb.state() 走 CDP，页面忙时一次
+                #     要几百毫秒到一秒，按 n 计数会拖到 20 秒才触发（实测踩到）。
+                if (not sniffing and _cdp is not None
+                        and st != "playing" and st != "failed"
+                        and self._web_state != "playing"
+                        and time.time() - self._web_t0 > 6):
+                    try:
+                        url0 = str(self.cur["urls"][self.cur["idx"]])
+                    except Exception:
+                        url0 = ""
+                    if url0 and self._sniff_worth(url0):
+                        sniffing = True
+                        self._sniff_parallel(url0, seq)
 
         threading.Thread(target=loop, daemon=True).start()
+
+    # ★ 央视系官方域名：它们的直播页只在页面里用 MSE 播 blob:，或者推的是
+    #   **私有 CDRM 加扰**的 TS —— 提取出来的 m3u8 mpv 连得上、也能解出画面，
+    #   但整屏花屏（分片头是 0x47 看着正常，载荷已被加扰，实测）。
+    #   这类线路只能让官方页自己播，绝不能提取（v2.10.22 第一版踩到过）。
+    _CCTV_HOSTS = ("cctv.com", "cctv.cn", "ysp.cctv", "cntv", "yangshipin")
+
+    @classmethod
+    def _is_cctv_host(cls, url):
+        low = (url or "").lower()
+        try:
+            host = low.split("//", 1)[1].split("/", 1)[0]
+        except Exception:
+            host = low
+        return any(h in host for h in cls._CCTV_HOSTS)
+
+    def _sniff_worth(self, url):
+        """这条网页线路值不值得「嗅探出真实流地址交给 mpv」。
+
+        排除两类：
+          · 直连流（.m3u8/.flv…）—— 本来就是流的地址，不需要嗅探；
+          · 央视系 —— 提取出来必花屏（见 _CCTV_HOSTS 注释）。
+        """
+        if not url:
+            return False
+        if _wvt is not None and _wvt.is_direct_stream(url):
+            return False
+        return not self._is_cctv_host(url)
+
+    def _sniff_parallel(self, url, seq):
+        """网页线路的**并行**兜底嗅探（v2.10.22）。
+
+        与 _sniff_fallback 的区别：那个是「网页彻底没戏了」的最后一搏，
+        会改状态文字、要走 26s 超时；这个是网页还在慢慢起播时**偷偷平行**
+        跑一轮 15s 的嗅探 —— 成功就顶掉网页（地方台网页那 82% 往往 8~10 秒
+        就能交给 mpv，不必等官方页那 14 秒），失败就静默放弃，用户无感。
+
+        最坏情况也因此从「35s 看门狗 + 26s 嗅探 ≈ 61 秒」压到 20 秒出头。
+        """
+        if _cdp is None:
+            return
+        req = self._req
+        self._log("并行嗅探启动（网页 5s 未出画）: %s" % url[:80])
+
+        def work():
+            r = None
+            try:
+                r = _cdp.sniff_stream(
+                    url, timeout=15, offscreen=True,
+                    profile_dir=self.sniff_dir,
+                    log=lambda *a: self._log(" ".join(str(x) for x in a)))
+            except Exception as e:      # noqa: BLE001
+                self._log("并行嗅探异常: %r" % (e,))
+            self._ui(lambda: self._after_parallel_sniff(r, req, seq))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_parallel_sniff(self, r, req, seq):
+        if req != self._req or seq != self._embed_seq:
+            return                      # 已换台 / 已不在这一轮，丢弃
+        if self._web_state == "playing":
+            return                      # 网页自己先出画了 —— 保留网页，不打断
+        if not (r and r.get("url")):
+            return                      # 嗅探没结果：静默放弃，网页继续起播
+        self._log("并行嗅探成功（顶掉网页）: %s" % r["url"])
+        self._ext_put(self.cur.get("tid"), self.cur.get("id"),
+                      self.cur.get("idx"), r["url"], r.get("headers"))
+        self._stop_embed()
+        self.status_lbl.configure(text="已解析到官网流，正在播放…")
+        self._set_loading_sub("已解析到流，交给播放器")
+        self._start_mpv(r["url"], headers=r.get("headers"))
 
     def _on_web_state(self, st, seq, reason=""):
         if seq != self._embed_seq or st == self._web_state:
@@ -2101,8 +2224,19 @@ class NativeApp:
 
         @ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HWND, wintypes.LPARAM)
         def cb(hwnd, _lp):
+            u32 = ctypes.windll.user32
+            # ★ v2.10.22：必须把 WebView2 的窗口排除掉。预热的浏览器就挂在
+            #   video_host 下（隐藏着待命），网页线路播完也常留着可见的它 ——
+            #   不排除的话「等 mpv 出画」第一轮就为真，等待层在第一帧之前
+            #   就被收掉，用户看到的是黑屏（实测踩到）。
+            if not u32.IsWindowVisible(hwnd):
+                return True
+            cls = ctypes.create_unicode_buffer(256)
+            u32.GetClassNameW(hwnd, cls, 256)
+            if "Chrome_WidgetWin" in (cls.value or ""):
+                return True
             r = wintypes.RECT()
-            if ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r)):
+            if u32.GetWindowRect(hwnd, ctypes.byref(r)):
                 if r.right - r.left > 100 and r.bottom - r.top > 100:
                     found.append(hwnd)
             return True
@@ -2118,7 +2252,14 @@ class NativeApp:
                 return              # 已换台/停止：新一轮有它自己的等待层
             if self._mpv_child():
                 break
-            time.sleep(0.25)
+            # ★ v2.10.22 兜底：mpv 进程活着、已等 8 秒还没等到视频子窗口
+            #   （子窗口枚举偶有漏判，比如驱动/窗口类名差异），别让转圈一直
+            #   挂到 30 秒 —— 收掉等待层，画面会自己出来。
+            if time.time() - t0 > 8:
+                p = self.mpv_proc
+                if p is not None and p.poll() is None:
+                    break
+            time.sleep(0.1)          # v2.10.22：250ms → 100ms，首帧更早收掉等待层
         self._ui(self._hide_loading)
 
     # ---------------- 选中高亮 ----------------
@@ -2145,6 +2286,9 @@ class NativeApp:
             return
         if r and r.get("url"):
             self._log("嗅探成功: %s" % r["url"])
+            # 记住它 —— 同频道同线路再进来直接走 mpv，不必再嗅一遍
+            self._ext_put(self.cur.get("tid"), self.cur.get("id"),
+                          self.cur.get("idx"), r["url"], r.get("headers"))
             self.status_lbl.configure(text="已解析到官网流，正在播放…")
             self._set_loading_sub("已解析到流，交给播放器")
             self._start_mpv(r["url"], headers=r.get("headers"))
@@ -2155,6 +2299,42 @@ class NativeApp:
             return
         self.status_lbl.configure(text="未能解析流地址，试试下一条线路")
 
+
+    # ---------------- 直连缓存（嗅探到的真实流地址，30 分钟） ----------------
+    def _ext_key(self, tid, cid, idx):
+        return "%s/%s/%s" % (tid, cid, idx)
+
+    def _ext_get(self, tid, cid, idx):
+        """命中返回 (url, headers)，否则 None。
+
+        ★ 同安卓端 tv_ext_cache 的思路：嗅探一次很贵（15~26s），但同一个频道
+          短时间内再进来 CDN 地址基本还能用 —— 直接交给 mpv，秒出画。
+          地址里带 token 会过期，所以只留 30 分钟；mpv 播失败立刻清掉重来。
+        """
+        k = self._ext_key(tid, cid, idx)
+        v = self._ext_cache.get(k)
+        if not v:
+            return None
+        url, headers, ts = v
+        if time.time() - ts > 1800:
+            self._ext_cache.pop(k, None)
+            return None
+        return (url, headers)
+
+    def _ext_put(self, tid, cid, idx, url, headers):
+        # ★ 央视系的地址一律不进缓存 —— 它们交给 mpv 必然花屏（私有 CDRM
+        #   加扰），缓存下来会让「下次进同一个频道」直接花屏，比第一次更糟。
+        if not url or self._is_cctv_host(url):
+            return
+        self._ext_cache[self._ext_key(tid, cid, idx)] = (
+            url, headers, time.time())
+        if len(self._ext_cache) > 24:       # 上限，防长跑堆积
+            old = sorted(self._ext_cache.items(), key=lambda kv: kv[1][2])
+            for k, _v in old[:len(self._ext_cache) - 24]:
+                self._ext_cache.pop(k, None)
+
+    def _ext_drop(self, tid, cid, idx):
+        self._ext_cache.pop(self._ext_key(tid, cid, idx), None)
 
     def _log(self, s):
         try:
@@ -2199,8 +2379,9 @@ class NativeApp:
         gen = self._mpv_gen
         self._paused = False
         self._ui(lambda: self.pause_btn.configure(text="⏸ 暂停"))
-        # 等窗口就绪再取 HWND
-        self.root.after(60, lambda: self._spawn_mpv(url, gen, headers))
+        # 等窗口就绪再取 HWND（_spawn_mpv 里还会 update_idletasks，
+        # 所以这里只要让出一帧即可 —— 原来 60ms 是纯白等）
+        self.root.after(20, lambda: self._spawn_mpv(url, gen, headers))
 
     def _spawn_mpv(self, url, gen, headers=None):
         if gen != self._mpv_gen:
@@ -2281,6 +2462,9 @@ class NativeApp:
     def _on_line_fail(self, rc):
         if not self.cur["urls"]:
             return
+        # 缓存里的地址也可能已过期（token 失效 / 源下线）→ 立刻作废，
+        # 免得下一轮又拿它喂 mpv 白等一次。
+        self._ext_drop(self.cur.get("tid"), self.cur.get("id"), self.cur.get("idx"))
         n = len(self.cur["urls"])
         nxt = self.cur["idx"] + 1
         if nxt < n:
@@ -2431,6 +2615,19 @@ class NativeApp:
         self.fav_btn.configure(text="★ 已收藏" if on else "☆ 收藏")
 
     # ---------------- 全屏 / 尺寸跟随 ----------------
+    def _on_root_configure(self, e=None):
+        """顶层窗口被拖动/缩放 → 告诉 WebView2 它所在的父窗口位置变了。
+
+        Chromium 把宿主窗口当父窗口用，父窗口**在屏幕上的位置**变了必须显式
+        通知（NotifyParentWindowPositionChanged），否则它内部维护的坐标还是
+        旧的 —— 内嵌画面会偏、页内下拉/弹层会飘。
+        """
+        if self.embed is not None:
+            try:
+                self.embed.notify_parent_moved()
+            except Exception:
+                pass
+
     def _on_host_resize(self, e=None):
         """播放区尺寸变了 → 稍后统一把 mpv / 浏览器窗口重新铺满。"""
         if self._fit_job is not None:
@@ -2604,6 +2801,13 @@ class NativeApp:
             # （避免「关掉软件还留个浏览器进程」）
             try:
                 self._stop_embed(wait=True)
+            except Exception:
+                pass
+            # ★ v2.10.22：嗅探用的浏览器也一起收 —— 并行兜底嗅探让它常被拉起，
+            #   不清就会「关掉软件还留个浏览器」。
+            try:
+                if _cdp is not None:
+                    _cdp.kill_all()
             except Exception:
                 pass
 

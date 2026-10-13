@@ -389,6 +389,31 @@ def kill_browser(proc, udd=None, keep_profile=False):
             pass
 
 
+def kill_all():
+    """关掉本进程启动过的所有嗅探浏览器（应用退出时调）。
+
+    ★ 嗅探会拉起一个真实浏览器进程。原来的兜底路径只在「官网线路全军覆没」
+      时才走，频率很低；v2.10.22 加了并行兜底嗅探之后它常被拉起，不显式清理
+      就会「关掉软件还留个浏览器」。返回关掉的个数。
+    """
+    n = 0
+    for proc, udd in list(_BROWSER_PROCS):
+        try:
+            kill_browser(proc, udd)
+            n += 1
+        except Exception:
+            pass
+    _BROWSER_PROCS[:] = []
+    global _DEFAULT_SESSION
+    try:
+        if _DEFAULT_SESSION is not None:
+            _DEFAULT_SESSION.close()
+    except Exception:
+        pass
+    _DEFAULT_SESSION = None
+    return n
+
+
 def _http_json(port, path, timeout=2):
     # ★ 端口为空时给个看得懂的错。之前直接 `"http://127.0.0.1:%d" % port`，
     #   port 是 None 就抛 TypeError('%d format: a real number is required, not NoneType')，
