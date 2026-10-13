@@ -636,6 +636,25 @@ public class MainActivity extends Activity {
         // 点全屏时才由 JS 桥切成横屏。
         applyOrientation(isTV);
         web.loadUrl("file:///android_asset/player.html" + (isTV ? "?tv=1" : ""));
+
+        /* ★ v2.10.16 pageView 预热：官方页 WebView 的「实例创建 + Chromium 渲染
+           引擎冷启动」在 TV 低端盒子上要 0.5-2s，过去全摊在用户第一次切网页
+           线路的那次换台里。启动 5s 后（主页面就绪、首屏稳定）在后台把 pageView
+           建好、load 一个 about:blank 把渲染进程拉起来 —— 第一次网页线路换台
+           直接复用热实例。代价 ~20MB 常驻内存，起播提速换得。
+           · about:blank 不触发 onPageFinished/注入（上面已有非 http(s) 守卫）；
+           · 销毁仍走 hidePage 全链（onDestroy 兜底），无泄漏路径。 */
+        web.postDelayed(new Runnable() {
+            @Override public void run() {
+                try {
+                    WebView v = ensurePageView();
+                    if (v != null) v.loadUrl("about:blank");
+                    android.util.Log.i("CleanTV/LC", "pageView 预热完成");
+                } catch (Throwable t) {
+                    android.util.Log.i("CleanTV/LC", "pageView 预热失败 " + t);
+                }
+            }
+        }, 5000);
     }
 
     /** 把字符串安全地嵌进 JS 字面量 */
@@ -783,6 +802,10 @@ public class MainActivity extends Activity {
             }
             @Override
             public void onPageFinished(WebView view, String url) {
+                /* ★ v2.10.16：pageView 预热会 load 一个 about:blank，也会走到这里 ——
+                   非真实网页一律静默，别把「页面已就绪」回调打进主 WebView
+                   （那会误推进 webState、误改状态行文案）。 */
+                if (url == null || !(url.startsWith("http://") || url.startsWith("https://"))) return;
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         try {
@@ -808,6 +831,11 @@ public class MainActivity extends Activity {
             @Override
             public void onProgressChanged(WebView view, int p) {
                 // 很多直播页是 SPA，初始加载完才挂视频；进度到 100 再补一次注入
+                // ★ v2.10.16：预热页（about:blank）不注入 —— 别往空页上打注入脚本
+                try {
+                    String u = view.getUrl();
+                    if (u == null || !(u.startsWith("http://") || u.startsWith("https://"))) return;
+                } catch (Throwable t) {}
                 if (p == 100) injectIntoPage(view);
             }
             @Override
@@ -1164,7 +1192,7 @@ public class MainActivity extends Activity {
         super.onUserLeaveHint();
         android.util.Log.i("CleanTV/LC", "onUserLeaveHint");
         try { if (nplayer != null) nplayer.stop(); } catch (Throwable ignore) {}
-        jsApp("__appPause&&__appPause()");
+        jsApp("window.__appPause&&window.__appPause()");
     }
 
     @Override
@@ -1176,7 +1204,7 @@ public class MainActivity extends Activity {
         //   网页的 visibilitychange 守卫根本不触发 —— 必须原生直接驱动 JS；
         //   且 web.onPause() 停不掉 MSE 音频（Chromium 91），只有 JS 暂停有效。
         //   （onUserLeaveHint 已提前驱动过一次，这里对锁屏等路径兜底。）
-        jsApp("__appPause&&__appPause()");
+        jsApp("window.__appPause&&window.__appPause()");
         // ★ 原生通道直接彻底释放（stop=backend.release）：不能依赖页面 JS ——
         //   HOME 时 evaluateJavascript 是异步排队的，renderer 随即被冻结，
         //   __appPause 里的 nativeStop 可能永远没跑，ExoPlayer 的 AudioTrack
@@ -1215,7 +1243,7 @@ public class MainActivity extends Activity {
         // 页面 JS 根据进后台前是否在播来恢复（不自动起播未在播的）
         try { web.resumeTimers(); } catch (Throwable ignore) {}
         try { web.setVisibility(View.VISIBLE); } catch (Throwable ignore) {}
-        jsApp("__appResume&&__appResume()");
+        jsApp("window.__appResume&&window.__appResume()");
         try { if (web != null) web.onResume(); } catch (Throwable ignore) {}
         try { if (pageView != null) pageView.setVisibility(View.VISIBLE); } catch (Throwable ignore) {}
         try { if (pageView != null) pageView.onResume(); } catch (Throwable ignore) {}
@@ -1226,7 +1254,7 @@ public class MainActivity extends Activity {
         super.onStop();
         android.util.Log.i("CleanTV/LC", "onStop");
         // onStop 再兜一道（部分设备 Home 键路径 onPause 后 WebView 仍可能出声）
-        jsApp("__appPause&&__appPause()");
+        jsApp("window.__appPause&&window.__appPause()");
         try { if (nplayer != null) nplayer.stop(); } catch (Throwable ignore) {}
         try { web.setVisibility(View.INVISIBLE); } catch (Throwable ignore) {}
         try { if (web != null) web.onPause(); } catch (Throwable ignore) {}

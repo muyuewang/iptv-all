@@ -1493,6 +1493,32 @@ function extcAbort(){
   clearStartWatch();
 }
 
+/* ★ v2.10.16 页面预热：同频道其余官方线路的域名提前握手（DNS+TCP+TLS）。
+   全 App 的 WebView 共用同一套 Chromium 网络栈，这里一次 favicon 级的 <img>
+   请求就把握手缓存暖好，之后 openPage 打开这条线路时省 0.5-1.5s。
+   · 只暖白名单域（与优选切换同一份名单），绝不对陌生站点乱发请求；
+   · favicon 404 也没关系 —— 握手已经完成，目的就达到了；
+   · fire-and-forget，onload/onerror 都吞掉，失败静默。 */
+function preconnOtherLines(curUrl){
+  try{
+    if(!cur.urls || cur.urls.length < 2) return;
+    var seen = {};
+    for(var k=0;k<cur.urls.length && k<5;k++){
+      var u = cur.urls[k];
+      if(!u || u === curUrl) continue;
+      var m = String(u).match(/^(https?:)\/\/([^\/?#]+)/i);
+      if(!m) continue;
+      var host = m[2].toLowerCase();
+      if(seen[host]) continue;
+      seen[host] = 1;
+      if(!sniffIsSafe(host)) continue;
+      var img = new Image();
+      img.onload = img.onerror = function(){};
+      img.src = m[1] + "//" + host + "/favicon.ico";
+    }
+  }catch(e){}
+}
+
 /* 官网源 · 网页线路：让原生开一个全屏 WebView 加载官方页面并注入取流脚本 */
 function playWebLine(url, i){
   if(__sessionClosed) return;    /* 同 playSoft：挡住卸载后的延时重连 */
@@ -1536,6 +1562,7 @@ function playWebLine(url, i){
        桌面端/无原生页环境的兜底，安卓端永远被 status 盖在上面。 */
     setStatus("正在打开官方直播页…（第"+(i+1)+"条线路）", true);
     $("webmaskTxt").textContent = "正在打开官方直播页…（第"+(i+1)+"条线路）";
+    preconnOtherLines(url);                  /* ★ 顺带把其余线路的域名握手暖上 */
     try{ NativeTV.openPage(url, JSON.stringify(ad), extra); }
     catch(e){
       $("webmask").classList.remove("show");
@@ -1560,7 +1587,7 @@ var webState = 0;
    原生在官方页 WebView 上拦截到 *.m3u8 / *.mpd 后会后台探测「是否明文可播」，
    结论通过 __onSniffResult 送到这里。两种用法：
 
-     · 优选（默认，仅限实测干净的白名单域名）：网页稳定起播 3s 后切到原生硬解。
+     · 优选（默认，仅限实测干净的白名单域名）：探测通过 1s 后切到原生硬解。
        官网页用 WASM+MSE 软解，盒子/低端机 CPU 吃满；原生硬解几乎不占 CPU。
      · 兜底（始终启用）：这条网页线路起播失败时，若已有可播的提取地址就直接原生播
        —— 不必再重载一遍官网页（桌面端要为这一步冷启动浏览器，30s+）。
@@ -1610,6 +1637,11 @@ function maybeArmSniffCut(){
   if(SNIFF.cutFor === j.url) return;
   if(!sniffIsSafe(j.url)) return;               /* 非白名单域只做兜底，不主动切 */
   clearSniffCut();
+  /* ★ v2.10.16 优选切换 3s → 1s：等待窗口存在的意义是「让探测结论再稳一稳」，
+     但 SniffProbe 的 PROBE-OK 本身已经做完了「下载首个分片 + 校验 TS/fMP4
+     明文容器字节」的强验证（见 SniffProbe.java），拿到 ok 结论后不需要再陪
+     网页跑 3 秒。早切 2s 意味着用户早 2s 看到硬解画面；万一原生起播失败，
+     armStartWatch 看门狗（10s）兜底换线，与原路径殊途同归。 */
   SNIFF.cutT = setTimeout(function(){
     SNIFF.cutT = null;
     if(__sessionClosed || webState !== 1 || NATIVE.active) return;
@@ -1617,7 +1649,7 @@ function maybeArmSniffCut(){
     var m2 = cur.urls && cur.urls[cur.idx];
     if(SNIFF.last.page && m2 && SNIFF.last.page !== m2) return;
     playSniffed();
-  }, 3000);
+  }, 1000);
 }
 
 /* 原生提取结论回调（由 MainActivity.pushSniffResult 调用） */
