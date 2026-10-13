@@ -113,8 +113,8 @@ tv_all/
 
 | 文件 | 适用 | 说明 |
 | --- | --- | --- |
-| `IPTV-v2.10.7.apk` | 安卓手机 / TV / 盒子 | 下载后直接安装 |
-| `IPTV-v2.10.7-Windows.exe` | Windows 10/11 x64 | 单文件双击即用，无需安装 |
+| `IPTV-v2.10.29.apk` | 安卓手机 / TV / 盒子 | 下载后直接安装 |
+| `IPTV-v2.10.29-Windows.exe` | Windows 10/11 x64 | 单文件双击即用，无需安装 |
 
 > Windows 端官网网页线路需 WebView2 运行时（Win11 自带）。
 
