@@ -338,9 +338,16 @@
      取 300 / 400（各留 ~20、~21 css 余量），编号列 + 名字基本贴到右边界。
      首个 `width:296px` 是不认 min() 的老 WebView 兜底（原来兜底写 64%，
      老引擎会拿到 410 css 的老样子）。 */
-  #chOv > #chOvSrc{width:296px;width:min(300px,52%);min-width:296px;
+  /* ★ v2.10.29 用户「再往回缩点」：300 里还塞着 22 css 的行尾内距（.chs 右 8 +
+     .chi 右内距 10 + 右外边距 4），这段也是肉眼可见的暗带。先把行尾内距挤到 8
+     （.chs 右 8→2、.chi 右内距 10→4、右外边距 4→2，TV 右内距 14→6），
+     面板再跟到 284 / TV 374 —— 「最长名右缘 → 面板右缘」的可见暗带
+     31 css → 15 css（其中 8 是故意留的呼吸位），实测 0 行截断。
+     ★ 别再往下缩到 272 那档：会把「CCTV-4 中文国际（欧洲/美洲）」截成
+     「…（欧…/美…」，把唯一区分字吃掉（tools/_probe_chwidth.py c_272 档实测 3 行截断）。 */
+  #chOv > #chOvSrc{width:280px;width:min(284px,52%);min-width:280px;
     background:linear-gradient(180deg,rgba(9,10,16,.94),rgba(9,10,16,.88));}
-  #chOv > .ovbody{width:296px;width:min(300px,52%);min-width:296px;
+  #chOv > .ovbody{width:280px;width:min(284px,52%);min-width:280px;
     background:linear-gradient(180deg,rgba(9,10,16,.88),rgba(9,10,16,.94));
     border-right:1px solid rgba(255,255,255,.09);
     box-shadow:8px 0 40px rgba(0,0,0,.45);}
@@ -374,7 +381,7 @@
     border-left-color:var(--brand);}
   #chOv .cat:focus,#chOv .chi:focus,#setOv .opt:focus{outline:none;
     background:rgba(255,255,255,.12);box-shadow:var(--glow);}
-  #chOv .chs{flex:1;overflow:auto;padding:6px 8px 6px 2px;scrollbar-width:none;}
+  #chOv .chs{flex:1;overflow:auto;padding:6px 2px;scrollbar-width:none;}
   #chOv .chs::-webkit-scrollbar{display:none;}
   /* ★ v2.10.19 用户定稿：去掉药丸气泡，行占满列宽、文字紧凑靠左 ——
      行左缘紧贴分组列，中间不再有空带。
@@ -385,7 +392,7 @@
      原来「竖线 → 编号数字左缘」整整 45css（.chs 左 8 + .chi margin 左 4 +
      .chi padding 左 10|14 + .no 固定 26px 装 1 位数字的 19px 空档），大字号
      TV 布局下更夸张。逐组试参后收到 18px 列宽 / 2+4 左距（tools/_probe_chlist.py）。 */
-  #chOv .chi{display:flex;gap:8px;padding:5px 10px 5px 4px;margin:2px 4px 2px 0;font-size:13.5px;color:var(--fg);
+  #chOv .chi{display:flex;gap:8px;padding:5px 4px;margin:2px 2px 2px 0;font-size:13.5px;color:var(--fg);
     cursor:pointer;align-items:center;}
   #chOv .chi .no{color:var(--fg-mute);font-size:11.5px;font-variant-numeric:tabular-nums;
     flex:0 0 auto;min-width:18px;text-align:right;}
@@ -393,13 +400,13 @@
   #chOv .chi:active{color:#fff;}
   #chOv .chi.on{color:var(--gold);font-weight:700;}
   body.tv #chOv > #chOvSrc,
-  body.tv #chOv > .ovbody{width:54%;width:min(400px,54%);}   /* v2.10.28：620→400（按内容实测 379） */
+  body.tv #chOv > .ovbody{width:54%;width:min(374px,54%);}   /* v2.10.28 620→400；v2.10.29 400→374（行尾内距同收） */
   /* ★ v2.10.19：TV 分组列同样贴内容（原 230px 固定宽装 2~4 字分组名，
      右侧一大条空白就是用户圈的「中间这块」）；药丸与手机统一贴内容。 */
   body.tv #chOv .cats{flex:0 0 auto;width:-webkit-fit-content;width:fit-content;
     min-width:72px;max-width:35%;}
   body.tv #chOv .cat{font-size:19px;padding:16px 12px;}
-  body.tv #chOv .chi{font-size:19px;padding:8px 14px 8px 4px;margin:2px 4px 2px 0;}
+  body.tv #chOv .chi{font-size:19px;padding:8px 6px 8px 4px;margin:2px 2px 2px 0;}
   /* 设置：右侧半透明面板
      ★ v2.10.26 用户定稿：面板收窄 + 内距收紧，做明显的「右侧挂板」
      （原来 min(330px,82%) 几乎铺满手机屏，看不出是贴右侧的抽屉）。
