@@ -387,25 +387,29 @@
     min-width:72px;max-width:35%;}
   body.tv #chOv .cat{font-size:19px;padding:16px 12px;}
   body.tv #chOv .chi{font-size:19px;padding:8px 14px;}
-  /* 设置：右侧半透明面板 */
+  /* 设置：右侧半透明面板
+     ★ v2.10.26 用户定稿：面板收窄 + 内距收紧，做明显的「右侧挂板」
+     （原来 min(330px,82%) 几乎铺满手机屏，看不出是贴右侧的抽屉）。
+     宽度/间距在已装版本上逐组试参截图后选定（tools/_probe_setov.py）。 */
   #setOv{justify-content:flex-end;}
-  #setOv .panel{width:82%;width:min(330px,82%);height:100%;background:rgba(10,11,15,.8);
-    border-left:1px solid rgba(255,255,255,.1);padding:20px 18px;overflow:auto;
-    display:flex;flex-direction:column;gap:20px;scrollbar-width:none;}
+  #setOv .panel{width:56%;width:min(236px,56%);height:100%;background:rgba(10,11,15,.8);
+    border-left:1px solid rgba(255,255,255,.1);padding:16px 15px;overflow:auto;
+    display:flex;flex-direction:column;gap:14px;scrollbar-width:none;}
   #setOv .panel::-webkit-scrollbar{display:none;}
-  #setOv .sec .t{font-size:12px;color:var(--fg-mute);margin-bottom:9px;letter-spacing:.04em;}
-  #setOv .opts{display:flex;flex-wrap:wrap;gap:9px;}
-  #setOv .opt{padding:9px 16px;border-radius:999px;background:rgba(255,255,255,.06);
-    border:1px solid rgba(255,255,255,.12);font-size:13.5px;color:var(--fg-dim);cursor:pointer;}
+  #setOv .sec .t{font-size:12px;color:var(--fg-mute);margin-bottom:8px;letter-spacing:.04em;}
+  #setOv .opts{display:flex;flex-wrap:wrap;gap:8px;}
+  #setOv .opt{padding:8px 13px;border-radius:999px;background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.12);font-size:13px;color:var(--fg-dim);cursor:pointer;}
   #setOv .opt:active{background:rgba(255,255,255,.12);}
   #setOv .opt.on{background:var(--brand-grad);color:#fff;border-color:transparent;font-weight:600;}
-  #setOv .foot{margin-top:auto;display:flex;align-items:center;gap:14px;
-    color:var(--fg-dim);font-size:13px;}
-  #setOv .foot .ic{font-size:17px;}
+  #setOv .foot{margin-top:auto;display:flex;align-items:center;gap:12px;
+    color:var(--fg-dim);font-size:12.5px;}
+  #setOv .foot .ic{font-size:16px;}
   #setOv .foot .clk{font-variant-numeric:tabular-nums;}
   #setOv .foot .net{color:#3ddc84;font-variant-numeric:tabular-nums;}
   #setOv .foot .res{font-variant-numeric:tabular-nums;}
-  body.tv #setOv .panel{width:70%;width:min(480px,70%);}
+  /* TV 同样收窄（大字号下按钮会换行，wrap 不破版） */
+  body.tv #setOv .panel{width:56%;width:min(420px,56%);gap:18px;padding:22px 20px;}
   body.tv #setOv .opt{font-size:18px;padding:13px 24px;}
   body.tv #setOv .sec .t{font-size:16px;}
   body.tv #setOv .foot{font-size:17px;}
