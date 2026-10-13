@@ -158,6 +158,10 @@ GOLD = "#ffc531"
 # 台标缩略尺寸
 LOGO_SIZE = 30
 
+# 官网源分组胶囊区高度（4 行 × 30px + 3 × 6px 间距）—— 51 个分组放不下，
+# 限高后内部滚动；前 12 个分组（广东/四川/河南/山东/卫视/江苏…）始终可见。
+GROUP_BAR_H = 138
+
 
 def badge_color(name):
     """按频道名生成稳定的徽标底色（无台标时用）。"""
@@ -1103,29 +1107,49 @@ class NativeApp:
         self.filter_slot = tk.Frame(left, bg=BG)
         self.filter_slot.pack(fill="x")
 
-        # 本机源：分类选择器（★ 与官网源的「分组」用同一个 DropSelect，
-        #   两个模式点上去长得一模一样，不再是「一个平铺胶囊 + 一个原生下拉」）
+        # 本机源：分类选择器（★ v2.10.21 从下拉改回三列平铺胶囊 —— 用户要
+        #   「平铺胶囊」那种一眼看全、点一下就走的手感，不要藏在下拉里）
         self.catf = tk.Frame(self.filter_slot, bg=BG)
         self.catf.pack(fill="x", padx=12, pady=(10, 8))
         tk.Label(self.catf, text="分类", bg=BG, fg=FG_MUTE,
-                 font=self.F(9)).pack(side="left", padx=(0, 8))
-        self.cat_bar = DropSelect(self.catf, font=self.F(10), height=36,
-                                  on_pick=self._on_cat_pick)
-        self.cat_bar.pack(side="left", fill="x", expand=True)
+                 font=self.F(9)).pack(anchor="w", pady=(0, 6))
+        self.cat_bar = PillBar(self.catf, cols=3, cell_h=30, gap=6, radius=9,
+                               font=self.F(10), on_pick=self._on_cat_pick)
+        self.cat_bar.pack(fill="x")
 
-        # 官网源：分组选择器（51 个分组，下拉自带滚动）
+        # 官网源：分组选择器（★ 同上改回平铺胶囊。51 个分组平铺约 646px 高，
+        #   会把频道列表挤没 —— 所以限高 4 行、内部滚动，滚轮单独吃）
         self.group_frame = tk.Frame(self.filter_slot, bg=BG)
         gf = tk.Frame(self.group_frame, bg=BG)
-        gf.pack(fill="x", padx=12, pady=(10, 8))
+        gf.pack(fill="x", padx=12, pady=(10, 6))
         tk.Label(gf, text="分组", bg=BG, fg=FG_MUTE,
                  font=self.F(9)).pack(side="left", padx=(0, 8))
-        self.group_cbo = DropSelect(gf, font=self.F(10), height=36,
-                                    on_pick=self._on_group_pick)
-        self.group_cbo.pack(side="left", fill="x", expand=True)
         tk.Button(gf, text="⟳", bg=BG2, fg=FG_DIM, relief="flat", bd=0, padx=8,
                   font=self.F(10), cursor="hand2", activebackground=BRAND,
                   activeforeground="#fff",
-                  command=self._reload_wvt).pack(side="left", padx=(6, 0))
+                  command=self._reload_wvt).pack(side="right")
+
+        gwrap = tk.Frame(self.group_frame, bg=BG)
+        gwrap.pack(fill="x", padx=12, pady=(0, 8))
+        gcv = self.group_canvas = tk.Canvas(gwrap, bg=BG, highlightthickness=0,
+                                            height=GROUP_BAR_H)
+        gsb = ttk.Scrollbar(gwrap, orient="vertical",
+                            style="Dark.Vertical.TScrollbar", command=gcv.yview)
+        self.group_cbo = PillBar(gcv, cols=3, cell_h=30, gap=6, radius=9,
+                                 font=self.F(10), on_pick=self._on_group_pick)
+        gwin = gcv.create_window((0, 0), window=self.group_cbo, anchor="nw")
+        gcv.configure(yscrollcommand=gsb.set)
+        # ★ add="+"：PillBar 自己已经绑了 <Configure>→redraw，这里不能用
+        #   默认替换语义，否则它的自适应重绘会被顶掉。
+        self.group_cbo.bind(
+            "<Configure>",
+            lambda e: gcv.configure(scrollregion=gcv.bbox("all")), add="+")
+        gcv.bind("<Configure>", lambda e: gcv.itemconfig(gwin, width=e.width))
+        # 分组区自己的滚轮：必须 return "break"，否则事件会冒泡到全局
+        # bind_all 的频道列表滚轮上（1146 行），变成「滚分组却滚了频道」。
+        gcv.bind("<MouseWheel>", self._on_group_wheel)
+        gcv.pack(side="left", fill="both", expand=True)
+        gsb.pack(side="right", fill="y")
         self.group_frame.pack_forget()      # 默认本机源：分组行先藏起来
 
         listwrap = tk.Frame(left, bg=BG)
@@ -1286,6 +1310,15 @@ class NativeApp:
 
     def _on_wheel(self, e):
         self.canvas.yview_scroll(int(-e.delta / 120), "units")
+
+    def _on_group_wheel(self, e):
+        """分组胶囊区滚轮：滚自己，并 return "break" 阻止冒泡到频道列表。
+
+        频道列表的滚轮是 bind_all 全局绑的（1146 行），不 break 的话滚分组
+        会把频道列表一起滚走。
+        """
+        self.group_canvas.yview_scroll(int(-e.delta / 120), "units")
+        return "break"
 
     def _on_epg_wheel(self, e):
         self.epg_canvas.xview_scroll(int(-e.delta / 120) * 2, "units")
@@ -1487,7 +1520,7 @@ class NativeApp:
             if c["group"] not in groups:
                 groups.append(c["group"])
         self.wvt_groups = groups
-        self.group_cbo.configure(values=groups)
+        self.group_cbo.set_items([(g, g) for g in groups])
         if not self.wvt_channels:
             if silent:
                 return          # 静默刷新拿到空表：保留当前画面，别把已显示的列表清掉
