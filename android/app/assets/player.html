@@ -769,7 +769,7 @@ function openChannel(tid, id, name){
   setFavBtnUI();
   $("btnEpg").className="ctlbtn"; $("epg").classList.remove("show");
   closeLinePanel();
-  $("ctrl").classList.remove("hide"); resetCtrlTimer();
+  hideCtrlLater();                 /* 起播先亮控制条 6s（内部含 syncDimmer） */
   showPlayerLayer();
   /* ★ 手机端：进入播放自动转横屏全屏，避免竖屏下视频只占上面一小条。
      竖屏手机屏宽有限，横屏才能让 16:9 视频真正铺满可视面积。
@@ -2291,26 +2291,65 @@ function resetCtrlTimer(){
     if(p.classList.contains("show") && !$("epg").classList.contains("show") && !$("linePanel").classList.contains("show")){
       $("ctrl").classList.add("hide");
       if($("ctrl").contains(document.activeElement)){ try{ $("v").focus(); }catch(e){} }
+      syncDimmer();               /* v2.10.25：控制条收起了，官方页恢复不透明 */
     }
   }, 6000);
 }
-/* 点一下屏幕唤出控制条，6 秒无操作自动隐藏 */
+/* ---------- v2.10.25 主 WebView UI 的「透出」开关 ----------
+   控制条 / 浮层都画在主 WebView 上，而官网源的官方页 pageView 盖在最上层。
+   要让它们看得见，得把官方页降到 0.35 alpha（★ 不能 INVISIBLE —— 那会触发
+   Chromium 引擎级暂停媒体，视频直接断）；同时原生侧会把触摸转发给主 WebView，
+   否则 alpha 后的 pageView 照样吃掉触摸，按钮点不动（见 MainActivity 的 ovOpenUI）。
+   过去这套只在浮层开合时做，控制条漏在外面 —— 官网源长按唤出的控制条压根看不见。 */
+function syncDimmer(){
+  var need = anyOvOpen() || !$("ctrl").classList.contains("hide")
+             || !!($("errCard") && $("errCard").classList.contains("show"));
+  try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(!!need); }catch(e){}
+}
+/* 长按（原生长按手势）唤出控制条，6 秒无操作自动隐藏 */
 function hideCtrlLater(){
   $("ctrl").classList.remove("hide");
   resetCtrlTimer();
+  syncDimmer();
 }
+/* ---------- v2.10.25 长按 = 控制条（由 MainActivity 的长按手势调用） ----------
+   用户定稿：单击归浮层（左半屏=频道列表 / 右半屏=设置），**长按**归控制条
+   （线路/暂停/比例/全屏）。此前单击被两个动作同时抢 —— 网页 onTap 的「切控制条」
+   靠 window.__nativeTapAt 防重入，可那个时间戳是在 fireOverlay() 里赋的，而
+   fireOverlay 要等 evaluateJavascript→__nativeTapOverlay 的异步回调，网页
+   pointerup 早跑完了 → 守卫生效不了 → 一次点击频道列表和控制条一起弹出来。
+   浮层开着时长按不插手（长按多半落在浮层的频道项上）。 */
+window.__tvToggleCtrl = function(){
+  try{
+    if(anyOvOpen()) return;
+    var c=$("ctrl");
+    if(c.classList.contains("hide")){ hideCtrlLater(); }
+    else { c.classList.add("hide"); syncDimmer(); }
+  }catch(e){}
+};
 
 /* ---------- 触屏手势（手机，电视家风格）----------
-   · 单击屏幕：唤出/收起控制条（★ 绑定在 #player 整层，原生模式下 #vwrap 隐藏也能响应）
+   · 单击屏幕：不在这里处理 —— 由原生 dispatchTouchEvent 判定
+     （左半屏 = 频道列表浮层 / 右半屏 = 设置浮层，v2.10.9 定稿）
+   · 长按屏幕：唤出/收起控制条（v2.10.25，同样在原生层判定）
    · 双击屏幕：进/出全屏
    · 左半边上下滑：调亮度；右半边上下滑：调音量（带手势指示）
+   ★ 只剩「双击 / 亮度 / 音量」还留在网页层：这三个只在本机源有效（官网源时
+     官方页 pageView 盖在最上层，主 WebView 收不到任何触摸）。
    判定：click 的坐标与 target 都可靠（touch 的 clientX 在 WebView 常为 NaN）。 */
-var touchState = { x:0, y:0, mode:null, timer:null, lastTap:0, lastPointer:0, moved:false,
-                   lp:false, lpT:null, lpUsed:false };   /* lp=长按已确认 lpUsed=长按滑动已消费(v2.10) */
+/* ---------- 控制条 / 浮层的落点命中判定（★ 必须是全局） ----------
+   ★ v2.10.25：这两个函数过去定义在 bindTouchGestures() **闭包内部**，而
+   window.__nativeTapOverlay（定义在顶层）也引用它们 —— 一调用就抛
+   ReferenceError，被它自己的 catch 吞掉后**恒返回 true**，等于「点在控制条 /
+   浮层等可点 UI 上就不弹浮层」这道保护从来就没生效过。实测：官网源在播时
+   点控制条上的「暂停」，原生照样再弹一个浮层出来（与用户贴的「两个 UI 叠在
+   一起」同源）。提到全局后判定才真正起作用。 */
+function inCtrl(t){ return t && t.closest && (t.closest("#ctrl")||t.closest(".ctlbtn")||t.closest(".line-item")); }
+function inOv(t){ return t && t.closest && (t.closest(".ov")); }
+
+var touchState = { x:0, y:0, mode:null, timer:null, lastTap:0, lastPointer:0, moved:false };
 function bindTouchGestures(){
   var wrap=$("player");
-  function inCtrl(t){ return t && t.closest && (t.closest("#ctrl")||t.closest(".ctlbtn")||t.closest(".line-item")); }
-  function inOv(t){ return t && t.closest && (t.closest(".ov")); }
 
   /* 单击 / 双击判定（click + pointerup 兜底） */
   function onTap(e){
@@ -2323,8 +2362,6 @@ function bindTouchGestures(){
        「点浮层里的频道换台」就整个失灵（实测踩到）。 */
     if(anyOvOpen()) return;
     if(inOv(e.target)) return;
-    /* v2.10：长按滑动唤出过浮层的手势，收手时不当作单击 */
-    if(touchState.lpUsed || touchState.lp){ touchState.lp=false; touchState.lpUsed=false; return; }
     var now=Date.now();
     if(now-touchState.lastTap < 320){          /* 双击 → 全屏 */
       clearTimeout(touchState.timer); touchState.lastTap=0;
@@ -2332,12 +2369,12 @@ function bindTouchGestures(){
     }else{
       touchState.lastTap=now;
       clearTimeout(touchState.timer);
-      touchState.timer=setTimeout(function(){    /* 单击 → 切换控制条 */
+      touchState.timer=setTimeout(function(){
+        /* ★ v2.10.25：单击不再切控制条（控制条改由长按唤出，见 __tvToggleCtrl）。
+           单击的职责整体让给原生的「左半屏=频道列表 / 右半屏=设置」，这里只负责
+           把控制条里的二级面板（线路 / 节目单）收掉。 */
         if($("linePanel").classList.contains("show") || $("epg").classList.contains("show")){
           closeLinePanel(); $("epg").classList.remove("show");
-        } else {
-          var c=$("ctrl");
-          if(c.classList.contains("hide")) hideCtrlLater(); else c.classList.add("hide");
         }
       }, 320);
     }
@@ -2351,45 +2388,26 @@ function bindTouchGestures(){
     onTap(e);
   });
 
-  /* 亮度/音量手势：触摸移动跟踪 */
+  /* 亮度/音量手势：触摸移动跟踪
+     ★ v2.10.25：这里原有「按住 450ms → 长按待滑 → 横滑唤浮层」的那套逻辑
+     （lp / lpT / lpUsed + showGestureInd 提示），已被原生层取代 ——
+     原生长按 = 控制条、原生单击 = 左半屏频道列表 / 右半屏设置浮层。
+     两套并存时（本机源下网页层也收得到触摸）一次长按会同时弹出控制条和浮层。 */
   wrap.addEventListener("touchstart", function(e){
     if(e.touches.length!==1) return;
     if(inCtrl(e.target)) return;
     if(anyOvOpen()) return;                       /* 浮层开着：里面的滚动交给自己 */
     touchState.x=e.touches[0].clientX; touchState.y=e.touches[0].clientY;
     touchState.mode=null; touchState.moved=false;
-    touchState.lp=false; touchState.lpUsed=false;
     touchState.startX=touchState.x; touchState.startY=touchState.y;
-    /* v2.10 长按判定：按住 450ms 不动 → 进入「长按待滑」状态，
-       之后水平滑 >40px 往右开频道列表 / 往左开设置 */
-    clearTimeout(touchState.lpT);
-    var sx=touchState.startX, sy=touchState.startY;
-    touchState.lpT=setTimeout(function(){
-      if(touchState.mode) return;                 /* 已进入亮度/音量手势 */
-      touchState.lp=true;
-      showGestureInd("📡", "← 列表 · 设置 →", 0.5);   /* 轻提示（700ms 自隐） */
-    }, 450);
   });
   wrap.addEventListener("touchmove", function(e){
     if(e.touches.length!==1 || !touchState.startX) return;
     var x=e.touches[0].clientX, y=e.touches[0].clientY;
     var dx=x-touchState.startX, dy=y-touchState.startY;
-    /* v2.10：长按确认后水平滑 → 唤出浮层（先于亮度/音量手势判定） */
-    if(touchState.lp && !touchState.lpUsed){
-      if(Math.abs(dx) > 40){
-        touchState.lpUsed=true; clearTimeout(touchState.lpT); hideGestureInd();
-        if(dx>0){ openChOv(); } else { openSetOv(); }
-        e.preventDefault(); return;
-      }
-      /* 长按后竖向滑走了 → 取消长按，仍可走亮度/音量 */
-      if(Math.abs(dy) > 40){ touchState.lp=false; clearTimeout(touchState.lpT); hideGestureInd(); }
-      e.preventDefault(); return;
-    }
     if(Math.abs(dy) < 14 && Math.abs(dx) < 14) return;
     if(!touchState.mode){
-      /* 只认竖向滑（亮度/音量）。横向滑动保留给长按浮层手势 ——
-         旧代码这里有个 mode="seek" 分支，但后面从没有处理它的代码，
-         是死代码，还只在长按手势起手阶段帮倒忙（v2.10 删除）。 */
+      /* 只认竖向滑（亮度/音量）—— 横向滑动不处理 */
       if(Math.abs(dy) > Math.abs(dx)){
         touchState.mode = (touchState.startX < window.innerWidth/2) ? "bright" : "vol";
       }
@@ -2400,10 +2418,8 @@ function bindTouchGestures(){
     e.preventDefault();
   });
   wrap.addEventListener("touchend", function(){
-    clearTimeout(touchState.lpT);
-    if(touchState.lp && !touchState.lpUsed) hideGestureInd();   /* 长按但没滑走 */
-    if(touchState.mode || touchState.lp) hideGestureInd();
-    touchState.mode=null; touchState.lp=false; touchState.startX=0;
+    if(touchState.mode) hideGestureInd();
+    touchState.mode=null; touchState.startX=0;
   });
 }
 
@@ -2531,8 +2547,8 @@ function closeAllOv(){
   var was = anyOvOpen();
   clearTimeout(__ovAutoT); __ovAutoT=null;
   closeChOv(); closeSetOv();
-  /* 官网页层（pageView）为浮层让位时被藏了 -> 关浮层恢复它 */
-  if(was){ try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(false); }catch(e){} }
+  /* 官网页层（pageView）为 UI 让位时被降了 alpha -> 没有别的 UI 就恢复它 */
+  if(was){ syncDimmer(); }
 }
 /* 借鉴 WebTvLive：浮层 12 秒无操作自动关闭（播放不中断，随时可再唤出） */
 var __ovAutoT=null;
@@ -2580,11 +2596,12 @@ window.__tvBack = function(){
   if(anyOvOpen()){ closeAllOv(); return "1"; }
   if($("player").classList.contains("show")){
     /* ★ 确认卡画在主 WebView 里，官方页 pageView 盖在上面会把它挡住 ——
-       弹卡前先藏官方页，「继续观看」时恢复（实测踩到：卡弹了但看不见）。 */
-    try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(true); }catch(e){}
+       弹卡后调 syncDimmer 降它的 alpha 让卡透出来（syncDimmer 把 #errCard
+       也算作「需要透出的 UI」），「继续观看」时 hideErrCard + syncDimmer 恢复。 */
     showErrCard({ title:"确定退出纯净电视？", desc:"退出后将停止播放",
       btns:[{label:"退 出", primary:true, fn:function(){ try{ NativeTV.exitApp(); }catch(e){} }},
-            {label:"继续观看", fn:function(){ try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(false); }catch(e){} }}] });
+            {label:"继续观看", fn:function(){ hideErrCard(); syncDimmer(); }}] });
+    syncDimmer();
     return "1";
   }
   return "0";
@@ -2707,9 +2724,12 @@ function openChOv(){
   CHOV.src = (srcMode==="wvt" && WVT.ready) ? "wvt" : "local";
   CHOV.group = (CHOV.src==="wvt") ? WVT.cur : curCat;
   closeSetOv();
+  /* ★ v2.10.25：控制条与浮层不再叠在一起（它们过去被同一次单击同时唤出）。
+     浮层一开就把控制条收掉，关浮层后画面干净，控制条要靠长按再唤。 */
+  $("ctrl").classList.add("hide");
   $("chOv").classList.add("show");
-  /* 官网页盖在浮层上面：临时藏掉（只停绘制，页面媒体继续跑） */
-  try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(true); }catch(e){}
+  /* 官网页盖在浮层上面：临时降 alpha（只让位，页面媒体继续跑） */
+  syncDimmer();
   renderChOvSrc(); renderChOvCats(); renderChOvChs();
   ovAutoKeep();
 }
@@ -2718,9 +2738,10 @@ function openChOv(){
 function openSetOv(){
   if(ovOpen("set")) return;
   closeChOv();
+  $("ctrl").classList.add("hide");        /* 同上：不与控制条叠加 */
   renderSetPanel();
   $("setOv").classList.add("show");
-  try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(true); }catch(e){}
+  syncDimmer();
   ovAutoKeep();
 }
 function renderSetPanel(){
@@ -3017,7 +3038,7 @@ function init(){
       if(!ctlFocus){ e.preventDefault(); openChOv(); return; }
     }
 
-    if(inPlayer){ $("ctrl").classList.remove("hide"); resetCtrlTimer();
+    if(inPlayer){ $("ctrl").classList.remove("hide"); resetCtrlTimer(); syncDimmer();
       /* 全屏时按「返回」先退全屏；这里用 KEYCODE_BACK 由原生接管，不重复处理 */
       var plist=listOf(".ctlbtn").concat(listOf("#lineGrid .line-item"));
       if(plist.indexOf(ae)<0){

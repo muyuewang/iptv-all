@@ -55,20 +55,54 @@ public class MainActivity extends Activity {
     private WebView pageView;
     private String pageInjectJs;
 
-    /* ---------------- v2.10.9 单击手势（唤出半透明浮层） ----------------
+    /* ---------------- 触摸手势（Activity 级统一判定） ----------------
        在 Activity 级 dispatchTouchEvent 里统一检测（官方页 pageView 盖在
        主 WebView 上面时，网页层的手势根本收不到触摸 —— 所以必须在原生层）。
-       判定（v2.10.9 用户定稿，长按改单击）：短按（<450ms、位移<60px）即触发，
-       按 **起始位置** 分：左半屏 = 频道列表 openChOv()；右半屏 = 设置 openSetOv()。
-       是否唤出由网页侧 __nativeTapOverlay 最终判定 —— 点在控制条 / 确认卡 /
-       线路面板等可点 UI 上时网页自己跳过，浮层不抢交互。
-       大幅竖向移动（亮度/音量手势）不触发。触发时官方页 pageView 只降
-       alpha 到 0.35（★ 不能 INVISIBLE —— 那会触发 Chromium 引擎级暂停媒体，
-       视频直接断；半透明则页面继续渲染、视频一直可见，浮层从底下透出来），
-       关浮层时恢复 1。 */
+       判定（v2.10.9 定稿 + v2.10.25 拆分）：
+         · **单击**（<450ms、位移<60px）→ 按 **起始位置** 分：
+           左半屏 = 频道列表 openChOv()；右半屏 = 设置 openSetOv()。
+           是否唤出由网页侧 __nativeTapOverlay 最终判定 —— 点在控制条 / 确认卡 /
+           线路面板 / 浮层等可点 UI 上时网页自己跳过，浮层不抢交互。
+         · **长按**（≥430ms 且未拖动）→ 控制条（线路/暂停/比例/全屏），见 gLpRun。
+           ★ v2.10.25 新增：此前单击被「浮层」和「控制条」两个动作同时抢，
+           一次点击两个 UI 全弹（用户截图实证）。控制条改由长按唤出后，单击
+           只剩浮层一个动作，冲突消失。
+       大幅竖向移动（亮度/音量手势）既不触发单击也不触发长按。触发浮层时官方页
+       pageView 只降 alpha 到 0.35（★ 不能 INVISIBLE —— 那会触发 Chromium 引擎级
+       暂停媒体，视频直接断；半透明则页面继续渲染、视频一直可见，浮层从底下透出来），
+       关浮层时恢复 1。控制条同理（见网页侧 syncDimmer）。 */
     private float gDownX, gDownY;
     private long gDownT;
     private boolean gDragged;
+
+    /* ---------------- v2.10.25 长按 = 控制条 ----------------
+       用户定稿：单击归浮层（左半屏=频道列表 / 右半屏=设置），**长按**归控制条
+       （线路/暂停/比例/全屏）。
+
+       为什么必须改：此前单击被两个动作同时抢。网页 onTap 的「切控制条」用
+       window.__nativeTapAt 防重入，可那个时间戳是在 fireOverlay() 里赋的，而
+       fireOverlay 要等 evaluateJavascript → __nativeTapOverlay() 的**异步回调**
+       才执行；网页 pointerup 早就跑完了 → 守卫生效不了 → 一次单击同时弹出
+       「频道列表 + 控制条」（用户截图实证）。
+
+       ★ 长按必须做在 Activity 级：官方页 pageView 盖在最上层时主 WebView 收不到
+       任何触摸，网页层的 touchstart 长按检测只在「本机源」才跑得起来。 */
+    private static final int LP_MS = 430;          /* 长按阈值：略小于单击上限 450 */
+    private boolean gLpFired = false;
+    private final Runnable gLpRun = new Runnable() {
+        @Override public void run() {
+            gLpFired = true;
+            try { root.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+            } catch (Throwable ignore) {}
+            /* 开/关控制条由网页侧定夺（浮层开着时网页自己忽略；官网源下网页
+               顺带把官方页降 alpha，否则控制条被 pageView 盖住看不见） */
+            jsApp("try{window.__tvToggleCtrl&&window.__tvToggleCtrl()}catch(e){}");
+        }
+    };
+    private void cancelLp() {
+        try { if (root != null) root.removeCallbacks(gLpRun); } catch (Throwable ignore) {}
+        try { if (web != null) web.removeCallbacks(gLpRun); } catch (Throwable ignore) {}
+    }
 
     /** 单击已确认：唤出浮层（right=true 设置 / false 频道列表） */
     private void fireOverlay(boolean right) {
@@ -86,11 +120,17 @@ public class MainActivity extends Activity {
      *  JS 侧按 devicePixelRatio 换算。 */
     private void fireOverlayIfFree(final boolean right, final float x, final float y) {
         if (web == null) { fireOverlay(right); return; }
-        /* ★ v2.10.13：未起播（状态页显示中）直接唤出，不问 JS —— 主 web 此时只有
-           状态页，不存在控制条/浮层等可点 UI；而官方页加载中渲染器忙，
+        /* ★ v2.10.13：官方页**加载中**（未起播、主 web 只有状态页）直接唤出，不问 JS
+           —— 主 web 此时不存在控制条/浮层等可点 UI，而官方页加载中渲染器忙，
            evaluateJavascript 往返可能被拖到数秒，用户点了几下全「没反应」
-           （CCTV-4 欧洲这类重页面实测复现）。起播后仍走 JS 判定避开可点 UI。 */
-        if (!pagePlayingSeen) { fireOverlay(right); return; }
+           （CCTV-4 欧洲这类重页面实测复现）。起播后仍走 JS 判定避开可点 UI。
+           ★ v2.10.25 修两处：
+             ① 判据补 pageView==null —— 本机源没有官方页，pagePlayingSeen 永远是
+                false，过去被这条「未起播直接唤出」误伤：本机源下点控制条上任何
+                按钮都会顺带弹出频道列表浮层；
+             ② 补 !ovOpenUI —— 控制条亮着时也必须走 JS 落点判定，否则点在
+                「暂停」上照样弹浮层（控制条=ovOpenUI 见 syncDimmer）。 */
+        if (pageView != null && !pagePlayingSeen && !ovOpenUI) { fireOverlay(right); return; }
         android.util.Log.i("CleanTV/LC", "tapFire right=" + right + " x=" + (int) x + " y=" + (int) y);
         try {
             web.evaluateJavascript(
@@ -118,18 +158,32 @@ public class MainActivity extends Activity {
                 gDownX = ev.getX(); gDownY = ev.getY();
                 gDownT = ev.getEventTime();
                 gDragged = false;
+                gLpFired = false;
+                cancelLp();
+                /* v2.10.25：布防长按（唤控制条）。浮层开着也照布 —— 网页侧
+                   __tvToggleCtrl 自己会忽略，长按仍按「消费掉」处理。 */
+                try { if (root != null) root.postDelayed(gLpRun, LP_MS); } catch (Throwable ignore) {}
                 break;
             case MotionEvent.ACTION_MOVE:
-                /* 大幅移动（亮度/音量手势、滑动）不算单击 */
-                if (Math.abs(ev.getY() - gDownY) > 60 || Math.abs(ev.getX() - gDownX) > 60)
-                    gDragged = true;
+                /* 大幅移动（亮度/音量手势、滑动）不算单击、也不算长按 */
+                if (Math.abs(ev.getY() - gDownY) > 60 || Math.abs(ev.getX() - gDownX) > 60) {
+                    if (!gDragged) { gDragged = true; cancelLp(); }
+                }
                 break;
             case MotionEvent.ACTION_UP:
-                /* v2.10.9 长按改单击：短按（<450ms、无明显拖动）唤浮层。
-                   是否点在控制条等可点 UI 上由网页 __nativeTapOverlay 判定（异步）。 */
-                if (!ovOpenUI && !gDragged && ev.getEventTime() - gDownT < 450) {
+                cancelLp();
+                /* v2.10.25：长按已消费这次手势（控制条切完了）→ 不再当单击开浮层。
+                   ★ 这里不再看 ovOpenUI —— 「浮层/控制条占着」的判定交给网页的
+                   __nativeTapOverlay 落点命中测试（点空白关浮层、点频道项换台都由
+                   网页那次 click 处理；命中 #ctrl/.ov 就不会再开一个新浮层）。 */
+                if (gLpFired) {
+                    /* 长按：什么都不做 */
+                } else if (!gDragged && ev.getEventTime() - gDownT < 450) {
                     fireOverlayIfFree(gDownX * 2 > Math.max(1, root.getWidth()), gDownX, gDownY);
                 }
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                cancelLp();
                 break;
         }
         /* ★ 浮层开着：触摸绕过半透明的 pageView，直接送主 WebView（长按手势检测在上面已做完，
@@ -575,6 +629,15 @@ public class MainActivity extends Activity {
         // JS 桥：全屏/横屏 + 原生硬解播放器
         web.addJavascriptInterface(new NativeBridge(), "NativeTV");
 
+        /* ★ v2.10.25：长按已被我们征用成「唤控制条」的手势 —— 别让 WebView 自带的
+           长按（文字选择 / 图片「保存」菜单 / ActionMode）跟它抢焦点。 */
+        try {
+            web.setLongClickable(false);
+            web.setOnLongClickListener(new android.view.View.OnLongClickListener() {
+                @Override public boolean onLongClick(android.view.View x) { return true; }
+            });
+        } catch (Throwable ignore) {}
+
         // ★ 原生硬解播放器：ExoPlayer 承载画面，WebView 只画控制条浮层。
         //   注意顺序——surface 必须加在 WebView 之下，WebView 里的控制条才能盖住它。
         nplayer = new NativePlayer(this, root);
@@ -783,6 +846,15 @@ public class MainActivity extends Activity {
             s.setBlockNetworkImage(true);
         } catch (Throwable t) {}
         v.addJavascriptInterface(new NativeBridge(), "NativeTV");
+
+        /* ★ v2.10.25：官方直播页自己也吃长按（文字选择 / 视频「保存」菜单），
+           它是盖在最上层的那一层，不压掉的话长按控制条会被它顺手接管。 */
+        try {
+            v.setLongClickable(false);
+            v.setOnLongClickListener(new android.view.View.OnLongClickListener() {
+                @Override public boolean onLongClick(android.view.View x) { return true; }
+            });
+        } catch (Throwable ignore) {}
 
         v.setWebViewClient(new WebViewClient() {
             @Override
