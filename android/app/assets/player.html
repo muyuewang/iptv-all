@@ -295,7 +295,7 @@
   #errCard .eic{font-size:30px;line-height:1;margin-bottom:10px;}
   #errCard .et{font-size:15px;font-weight:600;color:#fff;margin-bottom:6px;}
   #errCard .ed{font-size:12.5px;color:var(--fg-dim);line-height:1.6;margin-bottom:16px;
-    word-break:break-all;}
+    white-space:pre-line;word-break:break-all;}
   #errCard .eb{display:flex;gap:9px;justify-content:center;flex-wrap:wrap;}
   #errCard .eb button{border:none;border-radius:999px;padding:9px 18px;font-size:13px;
     font-weight:600;cursor:pointer;transition:transform .16s var(--ease),background .16s var(--ease);}
@@ -1431,6 +1431,28 @@ function playIdx(i){
   playSoft(i);
 }
 
+/* ==================== 老内核检测（v2.10.17） ====================
+   2017 年前的 TV 盒子（Android 7.1.1 + 老安全补丁）系统 WebView 常冻结在
+   Chrome 52~60 时代：MSE（MediaSource，网页播视频的基石）WebView 要
+   Chrome 53+ 才默认开启，WebAssembly 要 57+。央视网这类直播页一检测
+   到就自己弹「浏览器不支持视频播放」，页面根本不会起播 —— 我们的
+   提取链（嗅探 m3u8）也完全没机会跑。这类设备上官网线路注定全挂，
+   与其让用户看 60s 静默换线 + 一句「官网线路均不可用」，不如一开始
+   就说清原因、给出可行的补救（装新 WebView / 改看本机源）。 */
+var CORE = { old:false, why:"" };
+(function(){
+  try{
+    if(!window.MediaSource || !window.SourceBuffer){
+      CORE.old = true; CORE.why = "缺 MSE 网页视频能力";
+    } else if(typeof WebAssembly === "undefined"){
+      CORE.old = true; CORE.why = "缺 WebAssembly";
+    }
+  }catch(e){ CORE.old = true; CORE.why = "内核特性检测异常"; }
+})();
+window.__coreInfo = function(){
+  return JSON.stringify({old:CORE.old, why:CORE.why, ua:navigator.userAgent});
+};
+
 /* ==================== 直链缓存直连（v2.10.15） ====================
    网页线路起播 10-20s 的大头是「打开官方页→站点自己的重页面+广告脚本→软解出画」。
    而提取链（SNIFF）成功后拿到的直链其实还能用很久（白名单站点 token 一般 30min+）。
@@ -1522,6 +1544,11 @@ function preconnOtherLines(curUrl){
 /* 官网源 · 网页线路：让原生开一个全屏 WebView 加载官方页面并注入取流脚本 */
 function playWebLine(url, i){
   if(__sessionClosed) return;    /* 同 playSoft：挡住卸载后的延时重连 */
+  /* ★ v2.10.17 老内核一次性提示：别让用户在黑屏换线里猜原因 */
+  if(CORE.old && !window.__coreWarned){
+    window.__coreWarned = true;
+    toast("本机 WebView 内核过旧（"+CORE.why+"），官网线路可能放不了；建议升级系统 WebView 或改看本机源", {type:"info"});
+  }
   /* ★ v2.10.15 直链缓存直连：这台·这条线路 30min 内提取成功过 → 跳过整个官方页，
      直接原生放缓存直链。失败由 extcFail 回退到这里再走网页（缓存已删）。 */
   if(window.NativeTV && NativeTV.nativePlayExt && SNIFF.on){
@@ -1728,10 +1755,13 @@ window.__onWebPageClosed = function(){
 /* 官网线路全挂的失败卡（被 __onWebPageClosed 与 __onWebPageFailed 共用） */
 function showWebDeadCard(){
   setStatus(null);
+  var whyOld = CORE.old ?
+    "。本机 WebView 内核过旧（"+CORE.why+"），官方页面自己会拒绝播放 ——\n" +
+    "建议给盒子安装新版「Android System WebView」（Android 7.1 最高可装 109+ 内核）后重试，或改看「本机源」频道（不走浏览器）" : "";
   var opts = {
     title: "官网线路均不可用",
     reason: window.__lastReason || "",
-    desc: "已尝试全部 " + cur.urls.length + " 条官网线路",
+    desc: "已尝试全部 " + cur.urls.length + " 条官网线路" + whyOld,
     btns: [
       { label:"重新尝试", primary:true, fn:function(){
           delete LINE_CACHE[cur.tid+"/"+cur.id];
