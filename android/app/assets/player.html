@@ -799,13 +799,18 @@ function openChannel(tid, id, name){
     playIdx(0);
     return;
   }
+  /* ★ v2.10.20 线路表短缓存（90s）：A→B→A 快速回切时不必再回接口取 token，
+     直接开播（真机上一次接口往返 300~800ms，是本机源换台里第一段等待）。
+     token 失效由下游「起播失败 → 换线」兜底，失败时顺手清缓存。 */
+  var ck = tid+"/"+id;
+  var uc = urlCacheGet(ck);
+  if(uc){ startLocal(uc.urls, uc.epg, ck); return; }
   C.fetchPlay(tid, id).then(function(res){
     /* ★ 请求在途时用户已经退出播放层 → 整条链作废。
        没有这道闸门的话，下面的 playIdx() 会在用户退回列表之后
        把频道重新拉起来（resumeWebMedia + 起播），即「按了返回却又冒出声音」。
        与 nextLine()/playSoft()/playWebLine() 的闸门是同一类问题（v2.4.7 残留的变体）。 */
     if(__sessionClosed) return;
-    cur.epg = res.epg || [];
     if(!res.urls.length){
       setStatus(null);
       showErrCard({ title:"线路解析失败", reason:"播放令牌已过期，返回重进可刷新",
@@ -813,21 +818,8 @@ function openChannel(tid, id, name){
               {label:"换频道", fn:closePlayer}] });
       return;
     }
-    cur.urls=res.urls; renderLines(); updateProgNow();
-    if(IS_TV){ var f=document.querySelector("#lineGrid .line-item"); if(f) f.focus(); }
-    /* ★ 选路结果缓存 5 分钟：同一个频道再进来直接命中，省掉整轮测速
-       （实测「换台慢」里最容易被感知的等待，就是这段并发探测） */
-    var key = tid+"/"+id, hit = LINE_CACHE[key];
-    if(hit && Date.now()-hit.ts < 300000 && hit.best < cur.urls.length){
-      playIdx(hit.best);
-      return;
-    }
-    setStatus("正在测速选路…", true);
-    pickBestLine(cur.urls).then(function(best){
-      if(__sessionClosed) return;         /* ★ 测速也可能跑很久，同样要复查闸门 */
-      cacheLine(key, best);
-      playIdx(best);
-    }).catch(function(){ if(!__sessionClosed) playIdx(0); });
+    urlCachePut(ck, res);
+    startLocal(res.urls, res.epg, ck);
   }).catch(function(e){
     /* ★ 同上：别把失败卡弹到用户已经退回去的列表上（实测踩到） */
     if(__sessionClosed) return;
@@ -838,9 +830,91 @@ function openChannel(tid, id, name){
       retrySec:8, onRetry:function(){ openChannel(tid,id,name); } });
   });
 }
+/* 本机源：拿到线路表后立刻开播（不等测速），测速在后台并行跑 */
+function startLocal(urls, epg, key){
+  if(__sessionClosed) return;
+  cur.epg = epg || [];
+  cur.urls = urls; renderLines(); updateProgNow();
+  if(IS_TV){ var f=document.querySelector("#lineGrid .line-item"); if(f) f.focus(); }
+  /* ① 实证线路优先（★ v2.10.20 实测教训）：探活「成功」≠ 能出帧 —— 线路1
+        首字节最快、测速把它选为最优，但它永远不出画（实测 CCTV1/CCTV5+ 都是
+        这条线路）。所以「真出过首帧」的线路（GOOD_LINE）压过测速推测
+        （LINE_CACHE）；有实证就直接播，连测速都不跑 —— 换台路径最短。 */
+  var gl = goodLineGet(key);
+  if(gl >= 0 && gl < cur.urls.length && !badLineIs(key, gl)){ playIdx(gl); return; }
+  /* ② 没有实证 → 用 5 分钟测速缓存（同样跳过已判死的线路） */
+  var hit = LINE_CACHE[key];
+  if(hit && Date.now()-hit.ts < 300000 && hit.best < cur.urls.length && !badLineIs(key, hit.best)){
+    playIdx(hit.best);
+    return;
+  }
+  /* ③ 都没有 → 立刻用第 1 条「没被判死」的线路开播（不再干等 0.5~2.5s 探测窗），
+        测速在后台并行跑；结果回来时若还没出首帧且更优才切（已出画绝不打断），
+        顺带把候选线路的 DNS/TCP 都预热了。
+        PICK_SEQ 会话号：换台/退出即失效，迟到的测速结果不会乱切。 */
+  var seq = ++PICK_SEQ, first = 0;
+  for(var z = 0; z < cur.urls.length; z++){ if(!badLineIs(key, z)){ first = z; break; } }
+  playIdx(first);
+  pickBestLine(cur.urls, key).then(function(r){
+    if(__sessionClosed || seq !== PICK_SEQ) return;
+    var best = r.best, rs = r.rs || [];
+    /* ★ v2.10.20 快判死：正在播的这条线路连响应头都拿不到（探测超时）→ 不等
+       6.5s 起播看门狗，立刻换下一条（实测这类「死线」很常见：既不报错也不出画，
+       是整个换台里最长的白等）。只认超时，不认服务器报错（可能只是不认 Range 头）。 */
+    if(rs[first] && rs[first].to && cur.idx === first && !NATIVE.firstFrame){
+      toast("线路" + (first+1) + "无响应，切换下一条", {type:"warn"});
+      nextLine(true);
+      return;
+    }
+    if(best >= cur.urls.length) return;
+    cacheLine(key, best);
+    if(best !== cur.idx && !NATIVE.firstFrame) playIdx(best);
+  }).catch(function(){});
+}
+
+/* 线路表短缓存：90s TTL、最多 30 条（A→B→A 回切直接开播） */
+var URL_CACHE = {};
+function urlCacheGet(key){
+  var e = URL_CACHE[key];
+  if(!e) return null;
+  if(Date.now() - e.ts > 90000) return null;
+  return e;
+}
+function urlCachePut(key, res){
+  URL_CACHE[key] = { urls: res.urls, epg: res.epg || [], ts: Date.now() };
+  var ks = Object.keys(URL_CACHE);
+  if(ks.length > 30) delete URL_CACHE[ks[0]];
+}
+function urlCacheDel(key){ try{ delete URL_CACHE[key]; }catch(e){} }
 
 /* 选路结果缓存（key → {best, ts}）：5 分钟 TTL，最多留 40 条 */
 var LINE_CACHE = {};
+/* ★ v2.10.20 上一条「真出过首帧」的线路（按频道记）：本机源换台立刻从它起播，
+   不再等测速窗。markFirstFrame 时写入（只记本机源）。 */
+var GOOD_LINE = {};
+var PICK_SEQ = 0;             /* 选路会话号：换台即 ++，迟到的测速结果一律作废 */
+function goodLinePut(key, i){
+  GOOD_LINE[key] = i;
+  var ks = Object.keys(GOOD_LINE);
+  if(ks.length > 60) delete GOOD_LINE[ks[0]];
+}
+function goodLineGet(key){
+  var i = GOOD_LINE[key];
+  return (typeof i === "number") ? i : -1;
+}
+/* ★ v2.10.20：某条线路被判定失败（看门狗超时 / 快判死 / 原生报错换线）→
+   按频道拉黑 10 分钟（BAD_LINE），并撤掉它的「实证」资格。下次进同一个频道
+   直接跳过它，连一次 1.5s 快判死都不用付。真正能出的线路会在 markFirstFrame
+   里重新记上（GOOD_LINE 优先，所以正常情况下根本走不到拉黑这一步）。 */
+function goodLineDrop(key, idx){
+  if(goodLineGet(key) === idx) delete GOOD_LINE[key];
+  try{ (BAD_LINE[key] = BAD_LINE[key] || {})[idx] = Date.now(); }catch(e){}
+}
+var BAD_LINE = {};
+function badLineIs(key, idx){
+  var m = BAD_LINE[key];
+  return !!(m && m[idx] && Date.now() - m[idx] < 600000);
+}
 function cacheLine(key, best){
   LINE_CACHE[key] = { best: best, ts: Date.now() };
   var ks = Object.keys(LINE_CACHE);
@@ -879,12 +953,14 @@ function updateClock(){
 function probeLine(url, timeoutMs){
   return new Promise(function(resolve){
     var t0=Date.now(), done=false, xhr=new XMLHttpRequest();
-    var finish=function(rtt, br){
+    var finish=function(rtt, br, to){
       if(done) return; done=true;
       try{xhr.abort();}catch(e){}
-      resolve({rtt: rtt, br: br});   /* rtt=首字节ms, br=估算kbps(0=未知) */
+      /* rtt=首字节ms, br=估算kbps(0=未知), to=true 表示「超时无响应」
+         （区别于 onerror：服务器报错可能只是不认 Range 头，播放器未必播不了） */
+      resolve({rtt: rtt, br: br, to: !!to});
     };
-    var to=setTimeout(function(){ finish(1e9, 0); }, timeoutMs);
+    var to=setTimeout(function(){ finish(1e9, 0, true); }, timeoutMs);
     try{
       xhr.open("GET", url, true);
       xhr.responseType="arraybuffer";
@@ -898,8 +974,11 @@ function probeLine(url, timeoutMs){
         }
       };
       xhr.onreadystatechange=function(){
-        if(xhr.readyState===2){ /* 已收到响应头，记录首字节时间（下限） */
-          if(!done){ /* 先记为候选，等 onprogress 拿更准的码率 */ }
+        /* ★ v2.10.20 早退：响应头已到但等 700ms 还没凑够 2048 字节 —— 这条线
+           明显不快，不必陪它等满整个 timeout（测速结果反正在后台跑，
+           但更早出结果就能更早纠正起播线路）。 */
+        if(xhr.readyState===2 && !done && Date.now()-t0 > 700){
+          clearTimeout(to); finish(Date.now()-t0, 0);
         }
       };
       xhr.onerror=function(){ clearTimeout(to); finish(1e9, 0); };
@@ -909,26 +988,34 @@ function probeLine(url, timeoutMs){
     }catch(e){ clearTimeout(to); finish(1e9, 0); }
   });
 }
-function pickBestLine(urls){
-  var n=Math.min(urls.length, 8), tasks=[];
-  for(var i=0;i<n;i++) tasks.push(probeLine(urls[i], 2500));
+function pickBestLine(urls, key){
+  /* ★ v2.10.20：探测窗 2500→1500ms、并发上限 8→6。测速已不挡起播，
+     这里只求「尽快给出更优线路」；慢线路由 700ms 早退与 timeout 双兜底。 */
+  var n=Math.min(urls.length, 6), tasks=[];
+  for(var i=0;i<n;i++) tasks.push(probeLine(urls[i], 1500));
   return Promise.all(tasks).then(function(rs){
     /* 低端机：码率惩罚 3 倍（宁可选低清也别卡）；中高端：只轻微考虑码率 */
     var wBr = (TIER === "low") ? 3.0 : 0.6;
     var best=0, bestScore=Infinity;
+    var bad = key ? (BAD_LINE[key] || {}) : {};
     for(var i=0;i<n;i++){
       var r=rs[i];
       var score;
       if(r.rtt>=1e9){ score = 1e7 + i; }              /* 失败线路垫底 */
+      else if(bad[i]){ score = 1e6 + i; }             /* ★ 已拉黑的线路排在失败之上、正常之下 */
       else {
-        /* 归一化：延迟(s) + 码率(Mbps)*权重；低码率得分更低 → 更容易被选中 */
+        /* 归一化：延迟(s) + 码率(Mbps)*权重；低码率得分更低 → 更容易被选中。
+           ★ 码率未知(0) 给 1.0 中性惩罚：不能让它凭「没测出码率」白占便宜
+           （700ms 早退的慢线路就是这种，不加惩罚会挤掉真·快线路）。 */
         var latS = r.rtt/1000;
-        var mbps = r.br/1000;
+        var mbps = r.br>0 ? r.br/1000 : 1.0;
         score = latS + mbps*wBr;
       }
       if(score<bestScore){ bestScore=score; best=i; }
     }
-    return best;
+    /* ★ v2.10.20：把每条线路的探测原始结果一并交回 —— 调用方要用它做「快判死」
+       （某条线路连响应都没有就别等看门狗了）。 */
+    return { best: best, rs: rs };
   });
 }
 
@@ -1079,7 +1166,14 @@ window.__onNativeState = function(state, detail){
    超时值跟「秒开 / 稳定」档联动：秒开 10s（激进换线，和 TVBoxOS 默认一致），
    稳定 15s（弱网多给一点耐心）。只在原生/软解路径上布防，官网网页线路
    有自己的页面看门狗与注入脚本兜底，不重复布置避免双跳。 */
-function startWatchMs(){ return (TUNE === "stable") ? 15000 : 10000; }
+function startWatchMs(){
+  /* ★ v2.10.20：本机源直连流正常 1-3s 就出帧，没必要等满 10s —— 一条「能连上
+     但不出帧」的坏线路会把整个窗口白占掉（实测 CCTV5体育：线路1 既不报错也
+     不出画，10s 后才换线，用户就是在这段时间骂慢）。官网源网页线路在 playIdx
+     里本来就不布防（页面自带看门狗），这里只是兜底值。 */
+  if(cur.tid !== "wvt") return (TUNE === "stable") ? 9000 : 6500;
+  return (TUNE === "stable") ? 15000 : 10000;
+}
 function clearStartWatch(){ if(__startWatchT){ clearTimeout(__startWatchT); __startWatchT = null; } }
 function armStartWatch(){
   clearStartWatch();
@@ -1096,6 +1190,9 @@ function armStartWatch(){
 /* 出首帧了 —— 撤看门狗，并把「连续自动跳台」计数清零（能起播就说明源没问题） */
 function markFirstFrame(){
   NATIVE.firstFrame = true; clearStartWatch(); __autoHopN = 0; hideStatus();
+  /* ★ v2.10.20：记住本机源这条「真出过首帧」的线路 —— 下次进同一个频道
+     立刻从它起播，不等测速窗（见 openChannel 的本机源分支）。 */
+  try{ if(cur.tid && cur.tid!=="wvt" && cur.idx>=0) goodLinePut(cur.tid+"/"+cur.id, cur.idx); }catch(e){}
   /* ★ v2.10.15 直连缓存：首帧确认 → 撤快速回退定时器 + 给缓存续命 */
   if(EXTC.trying){
     EXTC.trying = false; clearTimeout(EXTC.t); EXTC.t = null; EXTC.webUrl = "";
@@ -1934,6 +2031,10 @@ function nextLine(silent){
   /* ★ 会话已关闭（退出播放/切后台卸载）时，mpegts 的 error/ended 回调
      还可能排队触发到这里 —— 必须挡住，否则后台又把线路拉起来续响。 */
   if(__sessionClosed) return;
+  PICK_SEQ++;          /* ★ v2.10.20：换线决定优先于在途测速结果，作废它 */
+  /* ★ v2.10.20：当前这条线路已被现实证伪（超时/报错）→ 撤掉它的实证资格与
+     测速缓存，下次进这个频道别再从它起播。 */
+  try{ if(cur.tid!=="wvt") goodLineDrop(cur.tid+"/"+cur.id, cur.idx); }catch(e){}
   var i = cur.idx;
   if(i+1 < cur.urls.length){
     /* silent：调用方（起播看门狗）已经报过原因了，别叠两条 toast */
@@ -1951,6 +2052,7 @@ function nextLine(silent){
     btns: [
       { label:"重试", primary:true, fn:function(){
           delete LINE_CACHE[cur.tid+"/"+cur.id];      /* 清掉选路缓存，重新测速 */
+          urlCacheDel(cur.tid+"/"+cur.id);            /* ★ v2.10.20 同时清线路表缓存（token 可能已失效） */
           window.__lastReason = "";
           playIdx(0);
       }},
@@ -2416,16 +2518,26 @@ function renderChOvChs(asyncArr){
     d.dataset.cid=c.id; d.dataset.tid=c.tid;    /* 遥控器数字选台定位用 */
     d.querySelector(".no").textContent=String(c.no||"");
     d.querySelector(".nm").textContent=c.name;
-    /* ★ v2.10.19 误触根治：行占满列宽（居左贴分组列），行右缘之外的空白仍属
-       本行 —— 点击落点若在文字区右缘 +8px 之外，视为点空白 → 只关浮层不换台。
+    /* ★ v2.10.19/20 误触根治：行占满列宽（居左贴分组列），「文字右缘之外的
+       空白」也属于本行 —— 落点在文字右缘 +8px 之外，视为点空白 → 只关浮层不换台。
+       ★ 边界必须用「文字真实右缘」：.nm 是 flex:1 被拉满整行，它的
+       getBoundingClientRect().right 是行右缘，拿它当边界等于行内空白永远算文字区
+       （用户要的恰恰是「点右边那片空白就把列表关掉」）。
+       用 Range 量文本盒（elipsis 截断时不会超出元素盒，取 min 夹一下）。
        不能走 ovClickClose：它豁免 .chi target（本行就是 .chi，见其注释），
-       必须直接 closeAllOv；保留 __ovGuardUntil 防原生长按唤出后同手势误关。
-       （fit-content 方案被 Chromium intrinsic 尺寸三坑反复打回，弃用。） */
+       必须直接 closeAllOv；保留 __ovGuardUntil 防原生长按唤出后同手势误关。 */
     d.onclick=function(ev){
-      try{ var nm=d.querySelector(".nm"), r=nm.getBoundingClientRect();
-           if(ev.clientX > r.right + 8){
-             if(Date.now() >= (window.__ovGuardUntil||0)) closeAllOv();
-             return; } }catch(e){}
+      try{
+        var nm=d.querySelector(".nm"), r=null, tr=0;
+        try{ var rg=document.createRange(); rg.selectNodeContents(nm);
+             r=rg.getBoundingClientRect(); }catch(e2){}
+        var er=nm.getBoundingClientRect();
+        tr = r ? Math.min(r.right, er.right) : er.right;
+        if(ev.clientX > tr + 8){
+          if(Date.now() >= (window.__ovGuardUntil||0)) closeAllOv();
+          return;
+        }
+      }catch(e3){}
       closeAllOv(); openChannel(c.tid, c.id, c.name);
     };
     w.appendChild(d);
