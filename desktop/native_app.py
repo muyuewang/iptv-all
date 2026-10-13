@@ -89,6 +89,13 @@ try:
 except Exception as _e:                     # noqa: BLE001
     print("提示：内嵌浏览器不可用（%s）" % _e, file=sys.stderr)
 
+# 沉浸式窗口外框（Windows 去掉系统标题栏，见 winchrome.py）
+_winchrome = None
+try:
+    import winchrome as _winchrome          # desktop/winchrome.py
+except Exception as _e:                     # noqa: BLE001
+    print("提示：沉浸式窗口外框不可用（%s）" % _e, file=sys.stderr)
+
 IS_WIN = sys.platform.startswith("win")
 
 
@@ -893,6 +900,8 @@ class NativeApp:
         except Exception:
             pass
         self._after_map(self._set_taskbar_icon, (ico,))
+        # 沉浸式外框：去掉系统标题栏（Windows），顶栏顶到窗口最上沿
+        self._after_map(self._attach_immersive)
 
         # 跨线程 UI 队列（_ui 线程安全依赖；先建好，后台线程随时可能调 _ui）
         self._ui_q = queue.Queue()
@@ -966,6 +975,20 @@ class NativeApp:
         self._load_bar_tail = None
         self._load_bar_mid = None
         self._load_bar_head = None
+
+        # ---- 沉浸式外框（Windows 去掉系统标题栏 + 自绘窗口按钮）----
+        # ★ v2.10.33：系统那一行「最小化 / 最大化 / 关闭」不再显示，顶栏顶到
+        #   窗口最上沿。缩放 / 贴边吸附 / 双击最大化仍是系统行为（winchrome 只摘
+        #   WS_CAPTION、保留 WS_THICKFRAME，缩放边全原生）；唯独「拖窗口」因为
+        #   没有标题栏了，得 App 侧绑鼠标 → chrome.start_drag()。见 _bind_drag。
+        self.chrome = None
+        self._winbtns = {}
+        self._maxed = False             # 窗口是否最大化（按钮字形 / 边距用）
+        self._icon_fam = None           # Segoe MDL2 Assets（窗口按钮字形）
+        self._deco_t = 0.0              # 上次装饰区按下时刻（双击判重）
+        self._deco_xy = (-1, -1)        # 上次按下的位置（双击要位置也接近）
+        self._deco_tog = 0.0            # 上次切最大化/还原的时刻（防一次双击切两回）
+        self._deco_dragging = False     # 本次按下是否已交给系统起拖
 
         # ---- 全屏 ----
         self._fs_overlay = None
@@ -1094,6 +1117,210 @@ class NativeApp:
     def F(self, size, bold=False):
         return (self.font_family, size, "bold") if bold else (self.font_family, size)
 
+    # =============== 沉浸式窗口外框（Windows 无系统标题栏） ===============
+    # winchrome 只干两件事：① 摘掉 WS_CAPTION（保留 WS_THICKFRAME）；② 按边框
+    # 补偿最大化矩形。缩放 / 贴边吸附 / 边缘鼠标指针 / Win+方向键 全是系统原生
+    # 行为（命中测试都不用我们管）。
+    # 顶栏于是顶到窗口最上沿，三个窗口按钮自绘在顶栏最右上角；
+    # 唯独「拖动窗口」没有标题栏可点了 → 见 _bind_drag（按下 → start_drag()，
+    # 仍是交给系统的模态移动循环，手感与原生标题栏完全一致）。
+    def _icon_font(self):
+        """窗口按钮字形字体：Segoe MDL2 Assets（Win10/11 自带，字形最正）。"""
+        if self._icon_fam is None:
+            fam = ""
+            try:
+                import tkinter.font as tkfont
+                if "Segoe MDL2 Assets" in set(tkfont.families()):
+                    fam = "Segoe MDL2 Assets"
+            except Exception:
+                fam = ""
+            self._icon_fam = fam
+        return self._icon_fam
+
+    def _glyph(self, key):
+        """窗口按钮字形：有 MDL2 用矢量字形，没有就退回普通字符。"""
+        if self._icon_font():
+            return {"min": "\ue921", "max": "\ue922",
+                    "restore": "\ue923", "close": "\ue8bb"}[key]
+        return {"min": "—", "max": "☐", "restore": "❐", "close": "✕"}[key]
+
+    def _build_window_buttons(self, top):
+        """顶栏最右上角的最小化 / 最大化 / 关闭（自绘，仅 Windows）。"""
+        if not IS_WIN:
+            return
+        self.wbtn_bar = bar = tk.Frame(top, bg=BG)
+        bar.pack(side="right", padx=(2, 0))
+        ifam = self._icon_font() or self.font_family
+        for key in ("min", "max", "close"):
+            cell = tk.Frame(bar, bg=BG, width=44, height=34)
+            cell.pack(side="left")
+            cell.pack_propagate(False)      # 不加会按字形收缩，悬停底色忽宽忽窄
+            ic = tk.Label(cell, text=self._glyph(key), bg=BG, fg=FG_DIM,
+                          font=(ifam, 10), cursor="hand2")
+            ic.place(relx=0.5, rely=0.5, anchor="center")
+            for w in (cell, ic):            # 内外都绑：鼠标移到字形上父控件会 Leave
+                w.bind("<Enter>", lambda e, k=key: self._wbtn_hover(k, True))
+                w.bind("<Leave>", lambda e, k=key: self._wbtn_hover(k, False))
+                w.bind("<Button-1>", lambda e, k=key: self._wbtn_click(k))
+            self._winbtns[key] = (cell, ic)
+
+    def _wbtn_hover(self, key, on):
+        it = self._winbtns.get(key)
+        if not it:
+            return
+        cell, ic = it
+        if key == "close":                  # 关闭键悬停 = Windows 惯例的红底白叉
+            bg, fg = ("#e81123", "#ffffff") if on else (BG, FG_DIM)
+        else:
+            bg, fg = (BG3, FG) if on else (BG, FG_DIM)
+        try:
+            cell.configure(bg=bg)
+            ic.configure(bg=bg, fg=fg)
+        except Exception:
+            pass
+
+    def _wbtn_click(self, key):
+        if key == "min":
+            if self.chrome is not None:
+                self.chrome.minimize()
+            else:
+                try:
+                    self.root.iconify()
+                except Exception:
+                    pass
+        elif key == "max":
+            self._toggle_maximize()
+        else:
+            self._on_close()
+
+    def _toggle_maximize(self):
+        if self.chrome is not None:
+            self.chrome.toggle_maximize()
+        else:                               # 没有外框时退回 Tk 自己的缩放
+            try:
+                self.root.state("normal" if self.root.state() == "zoomed"
+                                else "zoomed")
+            except Exception:
+                pass
+        self.root.after(140, self._sync_chrome)
+
+    def _sync_chrome(self):
+        """最大化状态同步到按钮字形 / 右边距（最大化时按钮让开屏幕角 8px）。"""
+        try:
+            maxed = bool(self.chrome is not None and self.chrome.maximized)
+            if maxed != self._maxed:
+                self._maxed = maxed
+                if getattr(self, "wbtn_bar", None) is not None:
+                    self.wbtn_bar.pack_configure(padx=(2, 8 if maxed else 0))
+            it = self._winbtns.get("max")
+            if it and it[1].cget("text") != self._glyph(
+                    "restore" if maxed else "max"):
+                it[1].configure(text=self._glyph("restore" if maxed else "max"))
+        except Exception:
+            pass
+
+    def _ensure_chrome(self):
+        """全屏往返之后补挂外框（Tk 会重建顶层窗口，样式一起丢）。"""
+        try:
+            if self.chrome is not None:
+                self.chrome.ensure()
+                self._sync_chrome()
+        except Exception:
+            pass
+
+    def _bind_drag(self, *widgets):
+        """把装饰区（顶栏空白 / logo / 标题）绑成「可拖动的标题栏」。
+
+        没有系统标题栏就没有 HTCAPTION 区域，所以拖动得自己发起来 →
+        chrome.start_drag() 内部走 PostMessage(WM_NCLBUTTONDOWN, HTCAPTION)，
+        把控制权交回系统的模态移动循环（Aero Snap / 双击最大化由系统自己认）。
+        按钮 / 下拉 / 输入框**不要**传进来 —— 它们要收自己的点击。
+        """
+        if not IS_WIN:
+            return
+        for w in widgets:
+            try:
+                w.bind("<Button-1>", self._deco_press, add="+")
+                w.bind("<B1-Motion>", self._deco_motion, add="+")
+                # Tk 的 <Double-Button-1> 在 Windows 上其实永远不来（Tk 建的窗口
+                # 类没有 CS_DBLCLKS，收不到 WM_LBUTTONDBLCLK）。双击靠 _deco_press
+                # 里的「时间 + 位置」判；这一行留着只是防别的平台上有。
+                w.bind("<Double-Button-1>", self._deco_double, add="+")
+            except Exception:
+                pass
+
+    def _deco_press(self, e=None):
+        """装饰区按下 → 交给系统的窗口移动循环。
+
+        ★ 双击不靠 Tk 自带的 <Double-Button-1>：第一次按下会立刻进入系统的模态
+          移动循环，那期间 Tk 收不到消息，第二次按下 Tk 未必还认得出是「双击」
+          （实测 <Double> 事件没来）。所以自己按「时间 + 位置」判：
+          400ms 内、且落点相差 8px 以内 → 算双击，改切最大化 / 还原。
+          位置判据是防「连着拖两下」被误认成双击。
+        """
+        if self.chrome is None or self._fullscreen:
+            return
+        now = time.time()
+        x = getattr(e, "x_root", 0) if e is not None else 0
+        y = getattr(e, "y_root", 0) if e is not None else 0
+        px, py = self._deco_xy
+        if (now - self._deco_t < 0.5 and abs(x - px) < 8 and abs(y - py) < 8):
+            self._deco_t = 0.0
+            self._deco_double()
+            return
+        self._deco_t = now
+        self._deco_xy = (x, y)
+        self._deco_dragging = False     # 等真的移动了再起拖（见 _deco_motion）
+
+    def _deco_motion(self, e=None):
+        """按住并**移动了**才交给系统起拖。
+
+        ★ 为什么不在 <Button-1> 里就起拖：系统的移动循环是**模态**的，它会把
+          Tk 的主循环一起堵住 —— 实测第二次按下的时间戳被推后到 1.1s 之后，
+          双击判重直接失效（而且单纯点一下也会平白进一次模态循环）。
+          改成「移动才起拖」后：单击装饰区没有任何副作用，双击的两次按下都能
+          正常送到 Tk，判重才准；拖动只比原来晚 1px 起步，手感无差别。
+        """
+        if self.chrome is None or self._fullscreen or self._deco_dragging:
+            return
+        if self._deco_t <= 0:           # 刚判成双击，别拖
+            return
+        self._deco_dragging = True
+        self._deco_t = 0.0              # 已经拖过了 → 接下来的按下不算双击
+        self.chrome.start_drag()
+
+    def _deco_double(self, e=None):
+        """装饰区双击 → 最大化 / 还原（与原生标题栏一致）。
+
+        两条路都会走到这里（Tk 的 <Double> 事件、_deco_press 自己判出来的），
+        所以加个 80ms 闸门，避免同一次双击被切成两回又切回去。
+        """
+        now = time.time()
+        if now - self._deco_tog < 0.08:
+            return
+        self._deco_tog = now
+        if self.chrome is not None and not self._fullscreen:
+            self._toggle_maximize()
+
+    def _attach_immersive(self, tries=0):
+        """挂上沉浸式外框（映射之后才拿得到顶层 HWND）。"""
+        if not IS_WIN or _winchrome is None or self.chrome is not None:
+            return
+        ch = _winchrome.ImmersiveFrame(self.root, frame_color=BG)
+        if not ch.attach():
+            if tries < 25:
+                self.root.after(200,
+                                lambda: self._attach_immersive(tries + 1))
+            else:
+                self._log("沉浸式外框挂载失败（保留系统标题栏）")
+            return
+        self.chrome = ch
+        self._bind_drag(self.top_bar, getattr(self, "logo_lbl", None),
+                        getattr(self, "title_lbl", None))
+        self._sync_chrome()
+        # 客户区变大（吃掉了标题栏那几十像素）→ 画面窗口重铺一次
+        self.root.after(150, self._fit_children)
+
     def _setup_style(self):
         st = ttk.Style()
         try:
@@ -1117,10 +1344,14 @@ class NativeApp:
         top = self.top_bar = tk.Frame(self.root, bg=BG, height=58)
         top.pack(fill="x", side="top")
         top.pack_propagate(False)
-        tk.Label(top, text="● ", bg=BG, fg=BRAND,
-                 font=self.F(12, True)).pack(side="left", padx=(16, 0), pady=14)
-        tk.Label(top, text="纯净电视直播", bg=BG, fg=FG,
-                 font=self.F(14, True)).pack(side="left", pady=14)
+        # ★ v2.10.33 沉浸式：系统标题栏没了，logo + 标题这一小段（纯装饰）由
+        #   _bind_drag 绑成可拖动的「标题栏」（见 _attach_immersive）。
+        self.logo_lbl = tk.Label(top, text="● ", bg=BG, fg=BRAND,
+                                 font=self.F(12, True))
+        self.logo_lbl.pack(side="left", padx=(16, 0), pady=14)
+        self.title_lbl = tk.Label(top, text="纯净电视直播", bg=BG, fg=FG,
+                                  font=self.F(14, True))
+        self.title_lbl.pack(side="left", pady=14)
 
         # 数据源切换：官网源 / 本机源（官网源放第一位，v2.4.2 用户指定）
         self.src_bar = PillBar(top, cols=2, cell_h=30, gap=4, radius=8,
@@ -1160,8 +1391,13 @@ class NativeApp:
                   command=self._reload_wvt).pack(side="left", padx=(6, 0))
         self.group_frame.pack_forget()      # 默认本机源：分组行先藏起来
 
+        # ★ v2.10.33 沉浸式：系统标题栏已被 winchrome 摘掉，窗口按钮自绘在顶栏
+        #   最右上角。★ 必须在**这一组里第一个 pack** —— side="right" 是「后
+        #   pack 的靠左」，晚一步它就排到状态文案左边去了（实测踩过）。
+        self._build_window_buttons(top)
+
         self.status_lbl = tk.Label(top, text="", bg=BG, fg=FG_MUTE, font=self.F(9))
-        self.status_lbl.pack(side="right", padx=(8, 16))
+        self.status_lbl.pack(side="right", padx=(8, 12))
 
         self.settings_btn = tk.Button(top, text="⚙ 设置", bg=BG2, fg=FG_DIM,
                                       relief="flat", bd=0, padx=12, pady=6,
@@ -1177,7 +1413,9 @@ class NativeApp:
         se.pack(side="right", padx=6, pady=14, ipady=5)
         se.bind("<KeyRelease>", self._on_search)
         self.search_entry = se
-        tk.Label(top, text="🔍", bg=BG, fg=FG_MUTE, font=self.F(10)).pack(side="right")
+        self.search_icon = tk.Label(top, text="🔍", bg=BG, fg=FG_MUTE,
+                                    font=self.F(10))
+        self.search_icon.pack(side="right")
 
         # 主体
         body = self.body = tk.Frame(self.root, bg=BG)
@@ -2837,15 +3075,35 @@ class NativeApp:
         #   时右侧状态文案的空间不够，pack(side="right") 会把它裁掉半句，比整块
         #   收起更难看。这里按宽度主动收放 —— 恢复时**必须用 before= 指回设置
         #   按钮**，否则它会排到右侧队列末尾、跑到顶栏最左边（v2.4.2 踩过同类坑）。
+        # ★ v2.10.33 沉浸式：右上角又常驻了三个窗口按钮（约 134px），让位档位
+        #   整体右移；再加一档 —— 更窄时连搜索框一起收（最小窗宽 1000 也放得下）。
         try:
-            narrow = self.root.winfo_width() < 1240
+            w = self.root.winfo_width()
+            # 顶栏「全都要」的最小宽度实测 1401（左段 649 + 右侧一组 740 + 缝），
+            # 留点余量取 1405；再去掉状态文案那 262px 得 1150。
+            narrow = w < 1405
             if narrow and self.status_lbl.winfo_ismapped():
                 self.status_lbl.pack_forget()
             elif not narrow and not self.status_lbl.winfo_ismapped():
-                self.status_lbl.pack(side="right", padx=(8, 16),
+                self.status_lbl.pack(side="right", padx=(8, 12),
                                      before=self.settings_btn)
+            tight = w < 1150
+            if tight and self.search_entry.winfo_ismapped():
+                self.search_entry.pack_forget()
+                self.search_icon.pack_forget()
+            elif not tight and not self.search_entry.winfo_ismapped():
+                # 恢复顺序 = 原始 pack 顺序（entry 先、🔍 后）——
+                # 右侧队列是「后 pack 的靠左」，这样 🔍 才回到搜索框左边。
+                self.search_entry.pack(side="right", padx=6, pady=14, ipady=5)
+                self.search_icon.pack(side="right")
         except Exception:
             pass
+        self._sync_chrome()
+        # ★ 沉浸式外框：Tk 的 -fullscreen 往返会销毁并重建顶层窗口（HWND 变、
+        #   style 归零），所以每次 <Configure> 都 ensure() 一次 —— HWND 变了就
+        #   重挂，caption 被系统/Tk 加回来就再摘掉。
+        if self.chrome is not None:
+            self.chrome.ensure()
 
     def _on_host_resize(self, e=None):
         """播放区尺寸变了 → 稍后统一把 mpv / 浏览器窗口重新铺满。"""
@@ -2921,6 +3179,8 @@ class NativeApp:
                 self.epg_bar.pack(fill="x", side="bottom")
         # 窗口尺寸变了，mpv / 浏览器都要重新铺一次
         self.root.after(120, self._fit_children)
+        self.root.after(260, self._sync_chrome)
+        self.root.after(300, self._ensure_chrome)
         try:
             self.root.lift()
             self.root.focus_force()
@@ -3021,6 +3281,14 @@ class NativeApp:
     def _on_close(self):
         self._closing = True
         self._stop_mpv()
+        # 卸掉外框子类（把窗口过程还给 Tk）—— 否则销毁窗口时系统还会回调到
+        # Python 的函数指针，那会儿对象正在被回收，属于自找崩溃。
+        try:
+            if self.chrome is not None:
+                self.chrome.detach()
+                self.chrome = None
+        except Exception:
+            pass
         # ★ 只销毁窗口，不同步等浏览器退出 —— close() 的等待泵绝不能跑在
         #   Tk 回调里（DispatchMessage 嵌套进 Tcl 会撞 GIL → PyEval_RestoreThread
         #   段错误）。同步 close 挪到 mainloop 退出之后（run() 里），那时已无

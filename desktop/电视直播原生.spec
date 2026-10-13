@@ -27,8 +27,8 @@ a = Analysis(
                    'struct', 'tempfile', 'random',
                    # embed.py（官网源内嵌浏览器）用到的
                    'ctypes', 'ctypes.wintypes', 'ctypes.util',
-                   # 本工程内的两个本地模块（靠 import 闭包一般能收到，显式更稳）
-                   'cdp', 'embed',
+                   # 本工程内的几个本地模块（靠 import 闭包一般能收到，显式更稳）
+                   'cdp', 'embed', 'winchrome',
                    'PIL.Image', 'PIL'],
     hookspath=[],
     hooksconfig={},
