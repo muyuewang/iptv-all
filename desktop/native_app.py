@@ -158,6 +158,16 @@ GOLD = "#ffc531"
 # 台标缩略尺寸
 LOGO_SIZE = 30
 
+# 等待覆盖层（点频道 → 起播之间的过渡动画）
+LOAD_BG = "#0c0d12"             # 覆盖层底色
+LOAD_MS = 33                    # 刷新间隔（≈30fps；原来 50ms=20fps，转圈有顿感）
+LOAD_IN = 0.20                  # 淡入时长（秒）
+LOAD_OUT = 0.16                 # 淡出时长（秒）
+LOAD_DIM = "#2a2e3a"            # 转圈轨道
+LOAD_TAIL = "#8a4530"           # 彗尾（由暗到亮三段近似渐变）
+LOAD_HEAD = "#ffd8b0"           # 彗核
+LOAD_WARN = "#c8913c"           # 「线路慢」提示色
+
 
 def badge_color(name):
     """按频道名生成稳定的徽标底色（无台标时用）。"""
@@ -943,12 +953,19 @@ class NativeApp:
         self._web_hint = ""
 
         # ---- 等待反馈（点击频道 → 起播之间的过渡动画；控件在 video_host 建好后创建）----
+        # ★ v2.10.32 重做过渡动画：改为「状态机 + 每帧重绘」（in→hold→out），
+        #   淡入淡出、上浮入场、彗尾转圈、台标、计时；原来是 20fps 硬切进出。
         self._load_base = "正在连接…"
-        self._load_spin = 0
         self._load_bar_w = None
-        self._load_bar_rect = None
         self._load_after = None
         self._load_t0 = 0.0
+        self._load_phase = None      # None(隐藏) / "in" / "hold" / "out"
+        self._load_phase_t0 = 0.0
+        self._load_gen = 0           # 台标回调用：换频道就作废上一张
+        self._load_logo_bg = BG2     # 徽标底色（随帧与黑底做淡入插值）
+        self._load_bar_tail = None
+        self._load_bar_mid = None
+        self._load_bar_head = None
 
         # ---- 全屏 ----
         self._fs_overlay = None
@@ -1207,21 +1224,48 @@ class NativeApp:
         # ---- 等待动画覆盖层（点击频道后给「点了/在连」的即时反馈）----
         # place 成铺满 video_host 的一层；mpv/WebView2 的原生子窗口永远画在
         # Tk 之上，所以起播成功后画面会自然盖住它 —— 这里再主动收掉，双保险。
-        self._load_frame = lf = tk.Frame(self.video_host, bg="#0c0d12")
-        inner = tk.Frame(lf, bg="#0c0d12")
+        # 结构（自上而下）：台标徽标 → 频道名 → 彗尾转圈 → 状态 + 计时 → 流动条
+        self._load_frame = lf = tk.Frame(self.video_host, bg=LOAD_BG)
+        self._load_inner = inner = tk.Frame(lf, bg=LOAD_BG)
         inner.place(relx=0.5, rely=0.5, anchor="center")
-        self._load_cv = tk.Canvas(inner, width=46, height=46, bg="#0c0d12",
-                                  highlightthickness=0)
-        self._load_cv.pack(pady=(0, 14))
-        self._load_arc = self._load_cv.create_arc(6, 6, 40, 40, start=0, extent=280,
-                                                  style="arc", outline=BRAND2, width=4)
-        self._load_name = tk.Label(inner, text="", bg="#0c0d12", fg=FG,
+
+        self._load_logo_slot = slot = tk.Frame(inner, bg=BG2, width=46, height=46,
+                                               highlightthickness=1,
+                                               highlightbackground=LINE,
+                                               highlightcolor=LINE)
+        slot.pack(pady=(0, 15))
+        slot.pack_propagate(False)
+        self._load_logo = tk.Label(slot, text="", bg=BG2, fg="#fff",
+                                   font=self.F(18, True))
+        self._load_logo.pack(fill="both", expand=True)
+
+        # 转圈：一段暗轨道 + 三段同圆心弧叠出来的「彗尾」（Tk 描边没有渐变，
+        # 只能靠 3 段由暗到亮的弧近似，比原来单根均匀弧更像在转）
+        self._load_cv = cv = tk.Canvas(inner, width=62, height=62, bg=LOAD_BG,
+                                       highlightthickness=0)
+        cv.pack(pady=(0, 16))
+        _b = (7, 7, 55, 55)
+        self._load_track = cv.create_arc(*_b, start=0, extent=359.9, style="arc",
+                                         outline=LOAD_DIM, width=5)
+        self._load_tail = cv.create_arc(*_b, start=0, extent=120, style="arc",
+                                        outline=LOAD_TAIL, width=5)
+        self._load_mid = cv.create_arc(*_b, start=0, extent=62, style="arc",
+                                       outline=BRAND2, width=5)
+        self._load_head = cv.create_arc(*_b, start=0, extent=20, style="arc",
+                                        outline=LOAD_HEAD, width=5)
+
+        self._load_name = tk.Label(inner, text="", bg=LOAD_BG, fg=FG,
                                    font=self.F(15, True))
         self._load_name.pack()
-        self._load_dot = tk.Label(inner, text="", bg="#0c0d12", fg=FG_MUTE,
+        self._load_dot = tk.Label(inner, text="", bg=LOAD_BG, fg=FG_MUTE,
                                   font=self.F(10))
-        self._load_dot.pack(pady=(8, 18))
-        self._load_bar = tk.Canvas(inner, width=260, height=4, bg="#0c0d12",
+        self._load_dot.pack(pady=(8, 0))
+        # 常驻一行（空文本也占位），避免提示出现时整块内容跳一下
+        self._load_hint = tk.Label(inner, text="", bg=LOAD_BG, fg=LOAD_WARN,
+                                   font=self.F(9))
+        self._load_hint.pack(pady=(5, 16))
+
+        self._load_bar = tk.Canvas(inner, width=280, height=4, bg=LOAD_BG,
                                    highlightthickness=0)
         self._load_bar.pack()
 
@@ -2163,19 +2207,68 @@ class NativeApp:
 
     # ---------------- 等待反馈（点击频道 → 起播之间的过渡） ----------------
     def _show_loading(self, name, sub="正在连接…"):
-        """在播放区铺一层等待动画：频道名 + 旋转弧 + 步进提示 + 流动细条。
+        """在播放区铺一层等待动画：台标 + 频道名 + 彗尾转圈 + 状态计时 + 流动条。
 
         mpv / WebView2 的原生子窗口永远画在 Tk 控件之上，所以真正起播后
         画面会自然盖住这层 —— 这里在子窗口出现/收到 playing 时再主动收掉。
+
+        ★ v2.10.32：改成「状态机 + 每帧重绘」——
+          in（0.2s 淡入 + 内容上浮）→ hold（常显）→ out（0.16s 淡出后收起）。
+        换频道时若正在淡出，直接切回 in，不会闪一下。
         """
         self._load_name.configure(text=name)
         self._set_loading_sub(sub)
+        self._set_load_logo(name)
         f = self._load_frame
         f.place(relx=0, rely=0, relwidth=1, relheight=1)
         f.lift()
-        self._load_t0 = time.time()
+        now = time.time()
+        self._load_t0 = now
+        self._load_phase = "in"
+        self._load_phase_t0 = now
+        self._load_hint.configure(text="")
+        self._paint_loading(0.0, now)       # 先画成全黑，第一帧就干净地淡入
         if self._load_after is None:
-            self._load_tick()
+            self._load_after = self.root.after(LOAD_MS, self._load_tick)
+
+    def _set_load_logo(self, name):
+        """等待层台标：命中台标库显图，否则退回首字母徽标（与列表行同规则）。"""
+        self._load_gen += 1
+        gen = self._load_gen
+        self._load_logo_bg = BG2
+        try:
+            self._load_logo.configure(image="", text=(name[:1] if name else "?"),
+                                      fg="#fff", bg=BG2)
+        except Exception:
+            pass
+        self._load_logo.image = None
+        url = None
+        try:
+            url = _core.match_logo(name, self.logos)
+        except Exception:
+            url = None
+        if not url:
+            # 无台标 → 用与列表一致的首字母彩色徽标，别留一个空盒子
+            try:
+                self._load_logo_bg = badge_color(name)
+                self._load_logo.configure(bg=self._load_logo_bg)
+            except Exception:
+                pass
+            return
+
+        def on_logo(img, gen=gen):
+            # 异步下载：回来时可能已换频道（或控件已销毁）—— 直接丢弃。
+            if img is None or gen != self._load_gen:
+                return
+            try:
+                if not self._load_logo.winfo_exists():
+                    return
+                self._load_logo.configure(image=img, text="", bg=BG2)
+                self._load_logo.image = img
+            except Exception:
+                pass
+
+        self.logo_store.request(url, on_logo)
 
     def _set_loading_sub(self, sub):
         try:
@@ -2185,40 +2278,125 @@ class NativeApp:
             pass
 
     def _hide_loading(self):
-        f = getattr(self, "_load_frame", None)
-        if f is None:
+        """开始淡出（真正收起由 _load_tick 在动画走完后执行）。"""
+        if self._load_phase is None or self._load_phase == "out":
             return
-        try:
-            if f.winfo_ismapped():
-                f.place_forget()
-        except Exception:
-            pass
+        self._load_phase = "out"
+        self._load_phase_t0 = time.time()
+        if self._load_after is None:
+            self._load_after = self.root.after(LOAD_MS, self._load_tick)
+
+    def _paint_loading(self, a, now):
+        """按透明度 a（0=全隐 1=全显）重绘一帧。
+
+        Tk 的 Frame/Label 没有真正的透明度，这里用「把底色和文字色都从黑
+        插值到目标色」模拟淡入淡出；a>=1 时跳过全部配色（常显期只跑几何，
+        省掉每帧十几次 configure）。
+        """
+        cv = self._load_cv
+        if a < 0.999:
+            black = _hex_rgb("#000000")
+            bg = _lerp_rgb(black, _hex_rgb(LOAD_BG), a)
+            self._load_frame.configure(bg=bg)
+            self._load_inner.configure(bg=bg)
+            for w in (cv, self._load_bar, self._load_logo_slot):
+                w.configure(bg=bg)
+            for w in (self._load_name, self._load_dot, self._load_hint):
+                w.configure(bg=bg)
+            self._load_logo.configure(
+                bg=_lerp_rgb(black, _hex_rgb(self._load_logo_bg), a))
+            self._load_name.configure(fg=_lerp_rgb(_hex_rgb(bg), _hex_rgb(FG), a))
+            self._load_dot.configure(
+                fg=_lerp_rgb(_hex_rgb(bg), _hex_rgb(FG_MUTE), a))
+            self._load_hint.configure(
+                fg=_lerp_rgb(_hex_rgb(bg), _hex_rgb(LOAD_WARN), a))
+            for item, col in ((self._load_track, LOAD_DIM),
+                              (self._load_tail, LOAD_TAIL),
+                              (self._load_mid, BRAND2),
+                              (self._load_head, LOAD_HEAD)):
+                cv.itemconfigure(item,
+                                 outline=_lerp_rgb(_hex_rgb(bg),
+                                                   _hex_rgb(col), a))
+            # 上浮入场：内容从下方 5% 处升起（ease-out cubic）
+        e = 1.0 - (1.0 - a) ** 3
+        if a < 0.999:
+            self._load_inner.place_configure(rely=0.5 + 0.05 * (1.0 - e))
+        else:
+            self._load_inner.place_configure(rely=0.5)
+
+        # 彗尾：头在 ang，尾拖在后面（三段弧按不同 start/extent 叠出来）
+        ang = (now * 330.0) % 360.0
+        cv.itemconfigure(self._load_tail, start=ang - 118)
+        cv.itemconfigure(self._load_mid, start=ang - 62)
+        cv.itemconfigure(self._load_head, start=ang - 20)
+
+        # 流动条：左右往返 + smoothstep 缓入缓出（比匀速扫过更顺）
+        bar = self._load_bar
+        w = bar.winfo_width()
+        if w < 10:
+            w = 280
+        if self._load_bar_w != w or self._load_bar_head is None:
+            bar.delete("all")
+            bar.create_rectangle(0, 1, w, 3, fill="#1b1e27", width=0)   # 轨道
+            self._load_bar_tail = bar.create_rectangle(0, 0, 0, 4,
+                                                       fill=LOAD_TAIL, width=0)
+            self._load_bar_mid = bar.create_rectangle(0, 0, 0, 4,
+                                                      fill=BRAND2, width=0)
+            self._load_bar_head = bar.create_rectangle(0, 0, 0, 4,
+                                                       fill=LOAD_HEAD, width=0)
+            self._load_bar_w = w
+        p = (now * 0.62) % 2.0
+        t = p if p <= 1.0 else 2.0 - p
+        t = t * t * (3.0 - 2.0 * t)
+        # 从「刚进场」扫到「尾巴完全出画」：0 → w+96（彗尾全长 96）
+        head = (w + 96.0) * t
+        bar.coords(self._load_bar_tail, head - 96, 0, head - 52, 4)
+        bar.coords(self._load_bar_mid, head - 52, 0, head - 18, 4)
+        bar.coords(self._load_bar_head, head - 18, 0, head, 4)
+
+        # 状态文案：步进点（约 3 次/秒）+ 3 秒后带秒数 + 久等给一句提示
+        el = now - self._load_t0
+        txt = self._load_base.rstrip("…") + "." * (1 + int(now * 3.0) % 3)
+        if el >= 3.0:
+            txt += "   %ds" % int(el)
+        if self._load_dot.cget("text") != txt:
+            self._load_dot.configure(text=txt)
+        if el >= 12.0:
+            hint = "网络较慢，正在继续尝试（可稍候或换一条线路）"
+        elif el >= 6.0:
+            hint = "线路响应较慢，请稍候…"
+        else:
+            hint = ""
+        if self._load_hint.cget("text") != hint:
+            self._load_hint.configure(text=hint)
 
     def _load_tick(self):
-        """50ms 一拍：转弧 + 流动条 + 提示文字加步进点。仅覆盖层可见时运行。"""
+        """每 LOAD_MS 一拍：推进阶段 + 重绘。阶段结束即自停（不空转）。"""
         self._load_after = None
+        if self._load_phase is None:
+            return
         f = getattr(self, "_load_frame", None)
         if f is None:
+            self._load_phase = None
             return
         try:
-            if not f.winfo_ismapped():
-                return
-            self._load_spin = (self._load_spin + 14) % 360
-            self._load_cv.itemconfigure(self._load_arc, start=self._load_spin)
-            cv = self._load_bar
-            w = cv.winfo_width()
-            if w < 10:
-                w = 260
-            if self._load_bar_w != w or self._load_bar_rect is None:
-                cv.delete("all")
-                self._load_bar_rect = cv.create_rectangle(0, 0, 46, 4,
-                                                          fill=BRAND2, width=0)
-                self._load_bar_w = w
-            x = int((time.time() * 130) % (w + 46)) - 46
-            cv.coords(self._load_bar_rect, x, 0, x + 46, 4)
-            el = int(time.time() - self._load_t0)
-            self._load_dot.configure(text=self._load_base + "." * (1 + el % 3))
-            self._load_after = self.root.after(50, self._load_tick)
+            now = time.time()
+            dt = now - self._load_phase_t0
+            if self._load_phase == "in":
+                a = min(1.0, dt / LOAD_IN)
+                if a >= 1.0:
+                    self._load_phase = "hold"
+                    self._load_phase_t0 = now
+            elif self._load_phase == "out":
+                a = 1.0 - min(1.0, dt / LOAD_OUT)
+                if a <= 0.0:
+                    self._load_phase = None
+                    f.place_forget()
+                    return
+            else:
+                a = 1.0
+            self._paint_loading(a, now)
+            self._load_after = self.root.after(LOAD_MS, self._load_tick)
         except Exception:
             self._load_after = None
 
