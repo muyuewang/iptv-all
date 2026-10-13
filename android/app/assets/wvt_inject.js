@@ -58,8 +58,13 @@
   var CLOSE_ID = "__wvt_close";
 
   /* 超过这个时间还没见到画面 → 判定本线路不可用，让原生换下一条。
-     官网页面本身加载慢（SPA + 播放器 SDK）很正常，别设太短。 */
-  var FAIL_MS = 20000;
+     官网页面本身加载慢（SPA + 播放器 SDK）很正常，别设太短。
+     ★ v2.10.17 老内核快速判死：本注入脚本就跑在官方页 WebView 里，检测
+     MediaSource / WebAssembly —— 缺 MSE 的老内核（2017 年前的 TV 盒子
+     常见）官方页自己就会弹「浏览器不支持视频播放」，等再久 video 也不会
+     出现，20s 白等 × 多条线路 = 一分多钟黑屏。缩到 8s 快速换线。 */
+  var FAIL_MS = (window.MediaSource && window.SourceBuffer
+                 && typeof WebAssembly !== "undefined") ? 20000 : 8000;
   /* 更快的判据：播放器已经把源挂上、play() 也调过了，却连续这么多秒时间轴
      纹丝不动 —— 说明站点自己就没在播（CCTV-1 会直接提示「播出安排变更，
      暂不支持播放该时段内容」）。这种情况不用干等 20 秒。 */

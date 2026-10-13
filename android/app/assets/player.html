@@ -352,7 +352,9 @@
   body.tv #chOvSrc{padding:16px 22px;}
   body.tv #chOvSrc .sopt{font-size:18px;padding:12px 26px;}
   /* 频道列表：左侧分组列 + 右侧编号频道列 */
-  #chOv .cats{flex:0 0 92px;overflow:auto;padding:6px 0;
+  /* ★ v2.10.19：分组列不再固定宽（92px）—— 贴最宽分组名，右侧不再拖一条空带 */
+  #chOv .cats{flex:0 0 auto;width:-webkit-fit-content;width:fit-content;
+    min-width:56px;max-width:35%;overflow:auto;padding:6px 0;
     border-right:1px solid rgba(255,255,255,.08);scrollbar-width:none;}
   #chOv .cats::-webkit-scrollbar{display:none;}
   #chOv .cat{padding:8px 12px;font-size:13px;color:var(--fg-dim);cursor:pointer;
@@ -365,32 +367,26 @@
     background:rgba(255,255,255,.12);box-shadow:var(--glow);}
   #chOv .chs{flex:1;overflow:auto;padding:6px 8px;scrollbar-width:none;}
   #chOv .chs::-webkit-scrollbar{display:none;}
-  /* ★ v2.10.18 手机版药丸收缩到内容宽度：过去 .chi 全宽（flex 容器占满列宽），
-     频道名右侧的「空白」其实还在按钮里，手机一点就换台（用户实测误触）。
-     收缩后空白归浮层背景 → 点它走 ovClickClose 关浮层，所见即所点。
-     超长频道名：药丸自动扩到整列宽（max-width:100%），溢出部分由 JS 加跑马灯
-     循环滚动（用户定稿：不要省略号，全名都要看得到）。
-     TV 版不收（width:auto 恢复全宽 + 省略号）：遥控器焦点导航，无触摸误触。 */
-  #chOv .chi{display:flex;gap:8px;padding:7px 14px;margin:3px 6px;font-size:13.5px;color:var(--fg);
-    cursor:pointer;border-radius:999px;align-items:center;background:rgba(255,255,255,.055);
-    border:1px solid rgba(255,255,255,.07);transition:background .15s var(--ease);
-    width:-webkit-fit-content;width:fit-content;max-width:100%;overflow:hidden;}
+  /* ★ v2.10.19 用户定稿：去掉药丸气泡，行占满列宽、文字紧凑靠左 ——
+     行左缘紧贴分组列，中间不再有空带。
+     「点空白误换台」由 onclick 命中判定解决（文字区右侧空白 = 关浮层），
+     不用 fit-content 花活 —— flex 容器 intrinsic 尺寸在 Chromium 里坑太多
+     （min-content 收缩 / margin 不计入 / overflow:hidden 改变贡献，全踩过）。 */
+  #chOv .chi{display:flex;gap:8px;padding:5px 10px;margin:2px 4px;font-size:13.5px;color:var(--fg);
+    cursor:pointer;align-items:center;}
   #chOv .chi .no{color:var(--fg-mute);font-size:11.5px;font-variant-numeric:tabular-nums;
     flex:0 0 26px;text-align:right;}
-  /* 不收缩 + 不裁切：短名贴内容，长名溢出交给 .chi 裁切。
-     （收缩项会被 fit-content 按 min-content 计入，实测长名 120px 就被截 —— 别用）
-     ★ .nm 右侧 12px 余量：实测 Chromium 对 flex 容器 fit-content 的 intrinsic
-       测量比文字真实渲染宽度窄 ~10px，不补的话短名也会被裁掉一截。 */
-  #chOv .chi .nm{flex:0 0 auto;margin-right:12px;white-space:nowrap;}
-  #chOv .chi:active{background:rgba(255,255,255,.14);}
-  #chOv .chi.on{color:var(--gold);font-weight:700;background:rgba(255,197,49,.14);
-    border-color:rgba(255,197,49,.35);}
+  #chOv .chi .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #chOv .chi:active{color:#fff;}
+  #chOv .chi.on{color:var(--gold);font-weight:700;}
   body.tv #chOv > #chOvSrc,
   body.tv #chOv > .ovbody{width:54%;width:min(620px,54%);}
-  body.tv #chOv .cats{flex:0 0 230px;}
-  body.tv #chOv .cat{font-size:19px;padding:16px 22px;}
-  body.tv #chOv .chi{font-size:19px;padding:14px 16px;width:auto;max-width:none;overflow:visible;}
-  body.tv #chOv .chi .nm{flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;}
+  /* ★ v2.10.19：TV 分组列同样贴内容（原 230px 固定宽装 2~4 字分组名，
+     右侧一大条空白就是用户圈的「中间这块」）；药丸与手机统一贴内容。 */
+  body.tv #chOv .cats{flex:0 0 auto;width:-webkit-fit-content;width:fit-content;
+    min-width:72px;max-width:35%;}
+  body.tv #chOv .cat{font-size:19px;padding:16px 12px;}
+  body.tv #chOv .chi{font-size:19px;padding:8px 14px;}
   /* 设置：右侧半透明面板 */
   #setOv{justify-content:flex-end;}
   #setOv .panel{width:82%;width:min(330px,82%);height:100%;background:rgba(10,11,15,.8);
@@ -2420,7 +2416,18 @@ function renderChOvChs(asyncArr){
     d.dataset.cid=c.id; d.dataset.tid=c.tid;    /* 遥控器数字选台定位用 */
     d.querySelector(".no").textContent=String(c.no||"");
     d.querySelector(".nm").textContent=c.name;
-    d.onclick=function(){ closeAllOv(); openChannel(c.tid, c.id, c.name); };
+    /* ★ v2.10.19 误触根治：行占满列宽（居左贴分组列），行右缘之外的空白仍属
+       本行 —— 点击落点若在文字区右缘 +8px 之外，视为点空白 → 只关浮层不换台。
+       不能走 ovClickClose：它豁免 .chi target（本行就是 .chi，见其注释），
+       必须直接 closeAllOv；保留 __ovGuardUntil 防原生长按唤出后同手势误关。
+       （fit-content 方案被 Chromium intrinsic 尺寸三坑反复打回，弃用。） */
+    d.onclick=function(ev){
+      try{ var nm=d.querySelector(".nm"), r=nm.getBoundingClientRect();
+           if(ev.clientX > r.right + 8){
+             if(Date.now() >= (window.__ovGuardUntil||0)) closeAllOv();
+             return; } }catch(e){}
+      closeAllOv(); openChannel(c.tid, c.id, c.name);
+    };
     w.appendChild(d);
   });
   RENDER.arr=arr;    /* 供 nextChannelTarget（自动跳台）与遥控器切台使用 */
