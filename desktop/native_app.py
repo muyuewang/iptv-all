@@ -981,6 +981,9 @@ class NativeApp:
 
         # 启动跨线程 UI 队列排水器（必须在主线程启动）
         self.root.after(30, self._drain_ui)
+        # ★ v2.10.30 常驻纠偏守护：mpv 在 --wid 模式下会把子窗口设成错误尺寸
+        #   （宿主 × 系统缩放比，出画后才发生），必须持续盯着（见 _fit_watchdog）。
+        self.root.after(1200, self._fit_watchdog)
 
         # ★ v2.10.22 WebView2 预热：官网源网页线路第一次播放时，光「创建
         #   WebView2 环境」就要 1~2 秒（加载 Loader + 拉起 Edge 进程），全砸在
@@ -2251,6 +2254,9 @@ class NativeApp:
             if gen != self._mpv_gen:
                 return              # 已换台/停止：新一轮有它自己的等待层
             if self._mpv_child():
+                # v2.10.30：视频子窗口刚出现（≈首帧）→ 立刻把宿主尺寸推给它。
+                # mpv 建窗时用的是自己的尺寸，不主动推就一直是错的（见 _spawn_mpv）。
+                self._ui(self._fit_children)
                 break
             # ★ v2.10.22 兜底：mpv 进程活着、已等 8 秒还没等到视频子窗口
             #   （子窗口枚举偶有漏判，比如驱动/窗口类名差异），别让转圈一直
@@ -2418,6 +2424,15 @@ class NativeApp:
             self._log("mpv 已启动 pid=%s" % self.mpv_proc.pid)
             self.video_lbl.pack_forget()
             self.status_lbl.configure(text="")
+            # ★★ v2.10.30「第一次播放画面缺一块」的根治：
+            #   mpv 在 embedded(--wid) 模式下**建窗时不用父客户区尺寸** ——
+            #   实测（exe = DPI-unaware）：宿主客户区物理 1170x810，mpv 自己的
+            #   窗口却是 1463x1013（正好 ×1.25 = 系统 125% 缩放），还带
+            #   (+135,+42) 偏移 → 画面被放大并裁掉一块。mpv 只在**收到 WM_SIZE**
+            #   时才按父窗口重算，所以用户「点全屏再退出」就正常了（全屏触发了
+            #   WM_SIZE）。更坑的是它把窗口设成错尺寸的时机在**出画之后**
+            #   （实测 >3 秒），一次性定时纠偏根本追不上。
+            #   → 由 NativeApp._fit_watchdog 常驻纠偏（见该方法），这里不用管。
             # 等待层先留着，等 mpv 的视频子窗口真正出现（≈第一帧上屏）再收
             threading.Thread(target=self._wait_first_frame, args=(gen,), daemon=True).start()
             # 连 IPC（后台，连上后套用当前音量/画面比例）
@@ -2645,10 +2660,28 @@ class NativeApp:
             h = max(2, host.winfo_height())
             if _embed_mod is not None:
                 _embed_mod.cover_child_windows(host.winfo_id())
-            if self.embed is not None:
+            if self.embed is not None and tuple(self.embed.size or ()) != (w, h):
                 self.embed.size = (w, h)
         except Exception:
             pass
+
+    def _fit_watchdog(self):
+        """常驻守护：把 mpv 子窗口纠偏到宿主客户区（幂等、已判重，可安全重复调）。
+
+        为什么必须「常驻」而不是起播时调几次：mpv 在 embedded 模式下建窗用的是
+        错的尺寸（宿主 × 系统缩放比，见 _spawn_mpv 注释），而且它把窗口改成错
+        尺寸的时刻在**出画之后**（实测 >3s）—— 一次性纠偏会正好赶在它前面失效。
+        用户点全屏/退出全屏之所以能「自愈」，就是 WM_SIZE 让 mpv 自己重算了一次。
+        换台/重播同理，所以放在常驻循环里最稳（cover_child_windows 已做「已在位
+        就不动」判重，尺寸正确时不产生任何重绘）。
+        """
+        try:
+            p = self.mpv_proc
+            if p is not None and p.poll() is None:
+                self._fit_children()
+        except Exception:
+            pass
+        self.root.after(500, self._fit_watchdog)
 
     def _toggle_fullscreen(self):
         self._set_fullscreen(not self._fullscreen)

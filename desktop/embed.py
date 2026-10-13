@@ -327,6 +327,8 @@ def cover_child_windows(host_hwnd):
     w, h = rect.right - rect.left, rect.bottom - rect.top
     if w <= 0 or h <= 0:
         return 0
+    origin = wintypes.POINT(0, 0)
+    u32.ClientToScreen(host_hwnd, byref(origin))     # 宿主客户区左上角的屏幕坐标
     n = [0]
     CBTYPE = WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
@@ -337,6 +339,13 @@ def cover_child_windows(host_hwnd):
         name = cls.value or ""
         if name.startswith("Tk") or "Chrome_WidgetWin" in name:
             return True                      # Tk 自己的 / WebView2 的，都不动
+        # ★ v2.10.30：已经在位的就别再 MoveWindow —— 这个方法现在被「常驻守护」
+        #   每 500ms 调一次，无谓的 MoveWindow(repaint) 会让正在播的画面抖动。
+        cur = wintypes.RECT()
+        if u32.GetWindowRect(hwnd, byref(cur)):
+            if (cur.left == origin.x and cur.top == origin.y
+                    and cur.right - cur.left == w and cur.bottom - cur.top == h):
+                return True
         u32.MoveWindow(hwnd, 0, 0, w, h, True)
         n[0] += 1
         return True
