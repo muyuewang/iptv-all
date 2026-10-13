@@ -1111,6 +1111,38 @@ class NativeApp:
         self.src_bar.pack(side="left", padx=(20, 0), pady=14)
         self.src_bar.set_items([("wvt", "官网源"), ("local", "本机源")], "local")
 
+        # ★ v2.10.31 顶栏 / 左栏「一体」：分类 / 分组选择器从左侧栏**首行提到顶栏**。
+        #   以前左栏顶部单独占一行（「分组 央视 ▾ ⟳」），频道列表只能从第二行往下，
+        #   顶栏下方横着一条空档，左栏被切成「一条工具行 + 列表」两块。
+        #   现在它塞进顶栏同一格（本机源放「分类」、官网源放「分组」，互斥显示），
+        #   左栏从顶栏下面开始就是频道列表 —— 视觉上顶栏左段即左栏的头部。
+        #   宽度固定（pack_propagate(False)）：否则下拉会按 winfo_width=1 画出竖条。
+        self.filter_slot = tk.Frame(top, bg=BG, width=248, height=36)
+        self.filter_slot.pack(side="left", padx=(18, 0), pady=11)
+        self.filter_slot.pack_propagate(False)
+
+        # 本机源：分类选择器（★ v2.10.22 按用户要求改回**下拉** —— 与官网源的
+        #   「分组」共用同一个 DropSelect，两个模式点上去长得一模一样）
+        self.catf = tk.Frame(self.filter_slot, bg=BG)
+        tk.Label(self.catf, text="分类", bg=BG, fg=FG_MUTE,
+                 font=self.F(9)).pack(side="left", padx=(0, 8))
+        self.cat_bar = DropSelect(self.catf, font=self.F(10), height=36,
+                                  on_pick=self._on_cat_pick)
+        self.cat_bar.pack(side="left", fill="x", expand=True)
+
+        # 官网源：分组选择器（51 个分组，下拉面板自带内部滚动 MAX_ROWS=10）
+        self.group_frame = tk.Frame(self.filter_slot, bg=BG)
+        tk.Label(self.group_frame, text="分组", bg=BG, fg=FG_MUTE,
+                 font=self.F(9)).pack(side="left", padx=(0, 8))
+        self.group_cbo = DropSelect(self.group_frame, font=self.F(10), height=36,
+                                    on_pick=self._on_group_pick)
+        self.group_cbo.pack(side="left", fill="x", expand=True)
+        tk.Button(self.group_frame, text="⟳", bg=BG2, fg=FG_DIM, relief="flat", bd=0,
+                  padx=8, font=self.F(10), cursor="hand2", activebackground=BRAND,
+                  activeforeground="#fff",
+                  command=self._reload_wvt).pack(side="left", padx=(6, 0))
+        self.group_frame.pack_forget()      # 默认本机源：分组行先藏起来
+
         self.status_lbl = tk.Label(top, text="", bg=BG, fg=FG_MUTE, font=self.F(9))
         self.status_lbl.pack(side="right", padx=(8, 16))
 
@@ -1139,37 +1171,8 @@ class NativeApp:
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
 
-        # ★ 分类 / 分组共用「顶部同一槽位」—— 以前分组行排在频道列表后面，
-        #   pack 时被挤到左栏最底下，用户看到的就是「分类在顶、分组在底」。
-        #   现在两个互斥地占同一格，不管哪个源，选择器永远在同一个位置。
-        self.filter_slot = tk.Frame(left, bg=BG)
-        self.filter_slot.pack(fill="x")
-
-        # 本机源：分类选择器（★ v2.10.22 按用户要求改回**下拉** —— 与官网源的
-        #   「分组」共用同一个 DropSelect，两个模式点上去长得一模一样）
-        self.catf = tk.Frame(self.filter_slot, bg=BG)
-        self.catf.pack(fill="x", padx=12, pady=(10, 8))
-        tk.Label(self.catf, text="分类", bg=BG, fg=FG_MUTE,
-                 font=self.F(9)).pack(side="left", padx=(0, 8))
-        self.cat_bar = DropSelect(self.catf, font=self.F(10), height=36,
-                                  on_pick=self._on_cat_pick)
-        self.cat_bar.pack(side="left", fill="x", expand=True)
-
-        # 官网源：分组选择器（51 个分组，下拉面板自带内部滚动 MAX_ROWS=10）
-        self.group_frame = tk.Frame(self.filter_slot, bg=BG)
-        gf = tk.Frame(self.group_frame, bg=BG)
-        gf.pack(fill="x", padx=12, pady=(10, 8))
-        tk.Label(gf, text="分组", bg=BG, fg=FG_MUTE,
-                 font=self.F(9)).pack(side="left", padx=(0, 8))
-        self.group_cbo = DropSelect(gf, font=self.F(10), height=36,
-                                    on_pick=self._on_group_pick)
-        self.group_cbo.pack(side="left", fill="x", expand=True)
-        tk.Button(gf, text="⟳", bg=BG2, fg=FG_DIM, relief="flat", bd=0, padx=8,
-                  font=self.F(10), cursor="hand2", activebackground=BRAND,
-                  activeforeground="#fff",
-                  command=self._reload_wvt).pack(side="left", padx=(6, 0))
-        self.group_frame.pack_forget()      # 默认本机源：分组行先藏起来
-
+        # ★ v2.10.31：左栏顶部不再有「分类 / 分组」行 —— 它们已提到顶栏
+        #   （见 _build_ui 顶栏部分），左栏顶部直接就是频道列表。
         listwrap = tk.Frame(left, bg=BG)
         listwrap.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(listwrap, bg=BG, highlightthickness=0)
@@ -1388,14 +1391,24 @@ class NativeApp:
             # ★ 切回本机源：必须把内嵌浏览器藏起来 —— 它是 Win32 子窗口，
             #   不藏的话会一直压在播放区最上层，mpv 的画面根本看不见。
             self._stop_embed(hide=True)
-            self.group_frame.pack_forget()
-            self.catf.pack(fill="x", padx=12, pady=(10, 8))
+            self._show_filter("cat")
             self._load_cat("tv")
 
+    def _show_filter(self, which):
+        """顶栏里「分类 / 分组」互斥占用同一格（v2.10.31）。
+
+        两个控件的 pack 参数必须由这里**统一**给出：以前在 _build_ui / _set_src /
+        _render_cat_bar_off 三处各写一遍 `pack(fill="x", padx=12, pady=(10,8))`，
+        改一处忘一处就会出现「一个源居中、另一个源偏上」的错位。
+        """
+        for w in (self.catf, self.group_frame):
+            w.pack_forget()
+        (self.catf if which == "cat" else self.group_frame).pack(
+            fill="both", expand=True)
+
     def _render_cat_bar_off(self):
-        """官网源下把「分类」收起来，换成「分组」下拉 —— 都占顶部同一格。"""
-        self.catf.pack_forget()
-        self.group_frame.pack(fill="x")
+        """官网源下把「分类」收起来，换成「分组」下拉 —— 都占顶栏同一格。"""
+        self._show_filter("group")
 
     def _reload_wvt(self):
         """点 ⟳：后台强制重新联网拉取。
@@ -2642,6 +2655,19 @@ class NativeApp:
                 self.embed.notify_parent_moved()
             except Exception:
                 pass
+        # ★ v2.10.31：顶栏左侧多了「分类 / 分组」选择器（固定 248px），窗口拉窄
+        #   时右侧状态文案的空间不够，pack(side="right") 会把它裁掉半句，比整块
+        #   收起更难看。这里按宽度主动收放 —— 恢复时**必须用 before= 指回设置
+        #   按钮**，否则它会排到右侧队列末尾、跑到顶栏最左边（v2.4.2 踩过同类坑）。
+        try:
+            narrow = self.root.winfo_width() < 1240
+            if narrow and self.status_lbl.winfo_ismapped():
+                self.status_lbl.pack_forget()
+            elif not narrow and not self.status_lbl.winfo_ismapped():
+                self.status_lbl.pack(side="right", padx=(8, 16),
+                                     before=self.settings_btn)
+        except Exception:
+            pass
 
     def _on_host_resize(self, e=None):
         """播放区尺寸变了 → 稍后统一把 mpv / 浏览器窗口重新铺满。"""
