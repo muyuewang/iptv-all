@@ -365,17 +365,21 @@
     border-left-color:var(--brand);}
   #chOv .cat:focus,#chOv .chi:focus,#setOv .opt:focus{outline:none;
     background:rgba(255,255,255,.12);box-shadow:var(--glow);}
-  #chOv .chs{flex:1;overflow:auto;padding:6px 8px;scrollbar-width:none;}
+  #chOv .chs{flex:1;overflow:auto;padding:6px 8px 6px 2px;scrollbar-width:none;}
   #chOv .chs::-webkit-scrollbar{display:none;}
   /* ★ v2.10.19 用户定稿：去掉药丸气泡，行占满列宽、文字紧凑靠左 ——
      行左缘紧贴分组列，中间不再有空带。
      「点空白误换台」由 onclick 命中判定解决（文字区右侧空白 = 关浮层），
      不用 fit-content 花活 —— flex 容器 intrinsic 尺寸在 Chromium 里坑太多
      （min-content 收缩 / margin 不计入 / overflow:hidden 改变贡献，全踩过）。 */
-  #chOv .chi{display:flex;gap:8px;padding:5px 10px;margin:2px 4px;font-size:13.5px;color:var(--fg);
+  /* ★ v2.10.27 用户定稿：编号列贴紧分组竖线，只留一点空间。
+     原来「竖线 → 编号数字左缘」整整 45css（.chs 左 8 + .chi margin 左 4 +
+     .chi padding 左 10|14 + .no 固定 26px 装 1 位数字的 19px 空档），大字号
+     TV 布局下更夸张。逐组试参后收到 18px 列宽 / 2+4 左距（tools/_probe_chlist.py）。 */
+  #chOv .chi{display:flex;gap:8px;padding:5px 10px 5px 4px;margin:2px 4px 2px 0;font-size:13.5px;color:var(--fg);
     cursor:pointer;align-items:center;}
   #chOv .chi .no{color:var(--fg-mute);font-size:11.5px;font-variant-numeric:tabular-nums;
-    flex:0 0 26px;text-align:right;}
+    flex:0 0 auto;min-width:18px;text-align:right;}
   #chOv .chi .nm{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   #chOv .chi:active{color:#fff;}
   #chOv .chi.on{color:var(--gold);font-weight:700;}
@@ -386,7 +390,7 @@
   body.tv #chOv .cats{flex:0 0 auto;width:-webkit-fit-content;width:fit-content;
     min-width:72px;max-width:35%;}
   body.tv #chOv .cat{font-size:19px;padding:16px 12px;}
-  body.tv #chOv .chi{font-size:19px;padding:8px 14px;}
+  body.tv #chOv .chi{font-size:19px;padding:8px 14px 8px 4px;margin:2px 4px 2px 0;}
   /* 设置：右侧半透明面板
      ★ v2.10.26 用户定稿：面板收窄 + 内距收紧，做明显的「右侧挂板」
      （原来 min(330px,82%) 几乎铺满手机屏，看不出是贴右侧的抽屉）。
