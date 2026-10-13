@@ -769,6 +769,19 @@ public class MainActivity extends Activity {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
         try { s.setCacheMode(WebSettings.LOAD_DEFAULT); } catch (Throwable t) {}
+        /* ★ v2.10.24 官方页禁图（对齐 CCTV_Viewer 的「禁用自动加载图片」）：
+           官方直播页首屏会拉一大堆图片 —— 频道封面、推荐位、活动 banner、台标
+           sprite。这些对「摸到 <video> 并起播」毫无贡献，却和播放器 SDK 抢同一批
+           并发连接与带宽，实测能把首帧往后拖。
+           WebSettings 有坑：setLoadsImagesAutomatically(false) 内部会把
+           blockNetworkImage 复位为 true；反过来 setBlockNetworkImage(false) 也会
+           把 auto-load 复位。两行都必须写，且顺序不能反，否则等于没禁。
+           页面自己的 UI 会变难看，但官方页在起播前 alpha=0、起播后又被
+           wvt_inject.js 把 video 钉成全屏，用户看不到它的界面。 */
+        try {
+            s.setLoadsImagesAutomatically(false);
+            s.setBlockNetworkImage(true);
+        } catch (Throwable t) {}
         v.addJavascriptInterface(new NativeBridge(), "NativeTV");
 
         v.setWebViewClient(new WebViewClient() {
@@ -790,6 +803,15 @@ public class MainActivity extends Activity {
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
                 try {
                     if (req != null && req.getUrl() != null) {
+                        /* ★ v2.10.24 广告 / 埋点域直接掐掉（对齐 CCTV_Viewer 的
+                           「精简网页元素」，我们连请求都不发，比它更彻底）。
+                           WebSettings.setBlockNetworkImage 只管图片；广告位的
+                           JS / iframe / beacon 还得在这里断。返回 204 空响应，
+                           页面侧看到的是「空资源」而不是网络错误，不会触发它
+                           自己的错误重试逻辑。 */
+                        if (isAdHost(req.getUrl().getHost())) {
+                            return emptyResponse();
+                        }
                         /* ★ 把 WebView 自己发的头也带出来做探测 —— 服务端校验的往往
                            不只是 Referer（还可能是 Accept / Sec-Fetch-* / 自定义头）。
                            WebResourceRequest 出了本回调就失效，所以立刻复制一份。 */
@@ -979,6 +1001,43 @@ public class MainActivity extends Activity {
      *   那条废地址上，结果恒 403。所以这里允许逐条探测（上限 MAX_SNIFF_TRIES），
      *   谁探通就用谁；一旦拿到 ok 结论就收工（sniffDone）。
      */
+    /** ★ v2.10.24 广告 / 统计域黑名单（按域名后缀匹配，不含子域通配）。
+        官方直播页上常见的第三方广告位与埋点，全部掐在请求发出之前。 */
+    private static final String[] AD_HOSTS = {
+        "doubleclick.net", "googlesyndication.com", "google-analytics.com",
+        "googletagmanager.com", "googleadservices.com", "googletagservices.com",
+        "2mdn.net", "cnzz.com", "hm.baidu.com", "pos.baidu.com", "cpro.baidu.com",
+        "union.baidu.com", "mmstat.com", "tanx.com", "alimama.com", "umeng.com",
+        "umengcloud.com", "miaozhen.com", "admaster.com.cn", "irs01.com",
+        "51.la", "gdt.qq.com", "e.qq.com", "adsame.com", "mediav.com",
+        "ipinyou.com", "adview.cn"
+    };
+
+    private static boolean isAdHost(String host) {
+        if (host == null || host.length() == 0) return false;
+        String h = host.toLowerCase();
+        for (int i = 0; i < AD_HOSTS.length; i++) {
+            String d = AD_HOSTS[i];
+            if (h.equals(d) || h.endsWith("." + d)) return true;
+        }
+        return false;
+    }
+
+    /** 204 空响应（广告位用）—— 页面看到的是「空资源」，不会触发错误重试 */
+    private static WebResourceResponse emptyResponse() {
+        try {
+            if (Build.VERSION.SDK_INT >= 21) {
+                return new WebResourceResponse("text/plain", "utf-8", 204, "No Content",
+                        java.util.Collections.<String, String>emptyMap(),
+                        new java.io.ByteArrayInputStream(new byte[0]));
+            }
+            return new WebResourceResponse("text/plain", "utf-8",
+                    new java.io.ByteArrayInputStream(new byte[0]));
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private void maybeSniff(String url, java.util.Map<String, String> reqHeaders) {
         if (url == null || sniffDone) return;
         String low = url.toLowerCase();
@@ -1150,6 +1209,25 @@ public class MainActivity extends Activity {
             v.destroy();
         } catch (Throwable ignore) {}
         try { if (web != null) web.bringToFront(); } catch (Throwable ignore) {}
+        /* ★ v2.10.24 预热接力：v2.10.16 的预热只有「启动 5s 后」那一次 —— 第一个
+           网页线路把热实例用掉，hidePage 又把它销毁，之后每次切到网页线路都得
+           重新 new WebView + 拉起 Chromium 渲染进程（低端盒子上 0.5~2s，全摊在
+           用户那次换台上）。这里拆完延迟 1.2s 再补一个热实例，状态与启动预热
+           完全一致（pageView 非空、未挂到 root、只 load about:blank），
+           所以对 doBack / 触摸转发 / setPageOverlay 的既有语义零影响。
+           1.2s 内用户又切了频道 → 那时 pageView 已非空，这里直接让位。 */
+        root.postDelayed(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (pageView != null || isFinishing()) return;
+                    WebView v = ensurePageView();
+                    if (v != null) v.loadUrl("about:blank");
+                    android.util.Log.i("CleanTV/LC", "pageView 预热接力完成");
+                } catch (Throwable t) {
+                    android.util.Log.i("CleanTV/LC", "pageView 预热接力失败 " + t);
+                }
+            }
+        }, 1200);
         try {
             if (web != null) {
                 web.evaluateJavascript(

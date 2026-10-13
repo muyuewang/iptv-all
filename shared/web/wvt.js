@@ -313,17 +313,23 @@
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(obj)); } catch (e) { }
   }
 
-  /* ------------------------------------------------------------ 线路优先级（v2.10.9）
-     用户实测：tv.cctv.com 官网直播页起播要等很久，央视频（yangshipin）最快。
-     上游 full.dat 把 tv.cctv.com 放第一，这里在消费端统一重排（联网刷新后也生效）：
-       央视频(0) > 移动直播间 cctvnews(1) > 其它(2) > tv.cctv.com 官网页(3)。
-     只排序不删除 —— tv.cctv.com 留作兜底线路。稳定排序手工实现（装饰-排序-还原），
-     Android 4.4 老 WebView 的 Array.sort 不保证稳定。 */
+  /* ------------------------------------------------------------ 线路优先级（v2.10.24 修正）
+     v2.10.9 依据一条「tv.cctv.com 官网直播页起播要等很久」的用户观察，把央视频
+     提到第一、把央视网直播页压到兜底。2026-10 在模拟器上按「冷/热各两次」重新
+     实测 CCTV-1 三条线路，结论**反转**：
+       · tv.cctv.com/live/cctv1/            4561 / 3248ms  ← 最快
+       · www.yangshipin.cn/tv/home?pid=...  5618~6297 / 5510ms
+       · m-live.cctvnews.cctv.com/...       7435 / 6538ms  ← 最慢
+     原因在「页面 ready → 出画」这一段：央视网直播页重（页面 ready 要 3.0s），
+     但用的是老 HLS 播放器，ready 后 1.5s 就出画；央视频是 SPA + WASM/MSE，
+     页面 ready 只要 1.4s，之后却还要再等 4.1s。合计央视网快 1.5~2s。
+     新序：tv.cctv.com(0) > 央视频(1) > 其它(2) > 移动直播间(3)。
+     只排序不删除 —— 播不动照旧由 pageFailed / 看门狗换下一条。 */
   function urlRank(u) {
     var s = String(u || "");
-    if (s.indexOf("yangshipin") >= 0) return 0;
-    if (s.indexOf("cctvnews") >= 0 || s.indexOf("liveRoom") >= 0) return 1;
-    if (s.indexOf("tv.cctv.com") >= 0) return 3;
+    if (s.indexOf("tv.cctv.com") >= 0) return 0;
+    if (s.indexOf("yangshipin") >= 0) return 1;
+    if (s.indexOf("cctvnews") >= 0 || s.indexOf("liveRoom") >= 0) return 3;
     return 2;
   }
   function normalizeChannel(c) {

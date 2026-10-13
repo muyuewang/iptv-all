@@ -371,16 +371,22 @@ def load_config(cache_dir=None, ttl=RAW_FILE_TTL, force=False):
 
 
 def _url_rank(u):
-    """线路优先级（v2.10.9）：用户实测 tv.cctv.com 官网直播页起播很慢，
-    央视频（yangshipin）最快。消费端统一重排，联网刷新后也生效：
-      央视频(0) > 移动直播间 cctvnews(1) > 其它(2) > tv.cctv.com 官网页(3)。
-    只排序不删除 —— tv.cctv.com 留作兜底线路。"""
+    """线路优先级（v2.10.24 修正）。v2.10.9 依据一条「tv.cctv.com 起播很慢」的
+    用户观察，把央视频提到第一、央视网直播页压到兜底。2026-10 重新实测（CCTV-1，
+    冷/热各两次）结论反转：
+      · tv.cctv.com/live/cctv1/            4561 / 3248ms  ← 最快
+      · www.yangshipin.cn/tv/home?pid=...  5618~6297 / 5510ms
+      · m-live.cctvnews.cctv.com/...       7435 / 6538ms  ← 最慢
+    差别全在「页面 ready → 出画」：央视网直播页重（ready 3.0s）但老 HLS 播放器
+    ready 后 1.5s 就出画；央视频是 SPA + WASM/MSE，ready 只要 1.4s，之后还要再等
+    4.1s。新序：tv.cctv.com(0) > 央视频(1) > 其它(2) > 移动直播间(3)。
+    只排序不删除，播不动由 pageFailed / 看门狗换下一条。"""
     s = str(u or "")
-    if "yangshipin" in s:
-        return 0
-    if "cctvnews" in s or "liveRoom" in s:
-        return 1
     if "tv.cctv.com" in s:
+        return 0
+    if "yangshipin" in s:
+        return 1
+    if "cctvnews" in s or "liveRoom" in s:
         return 3
     return 2
 

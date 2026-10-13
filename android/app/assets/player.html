@@ -808,18 +808,27 @@ function openChannel(tid, id, name){
     var pick=0, why="首条";
     try{
       var canExt = !!(window.SNIFF && SNIFF.on && window.NativeTV && NativeTV.nativePlayExt);
+      var nU = cur.urls.length;
+      /* ① 30min 内提取成功过的「直连缓存」线路 —— 连官网页都不用开 */
       if(canExt){
-        for(var z=0; z<cur.urls.length; z++){
+        for(var z=0; z<nU; z++){
           var ec = extCacheGet(cur.id, z);
           if(ec && ec.u && sniffIsSafe(ec.u)){ pick=z; why="直连缓存"; break; }
         }
       }
+      /* ② 第一条直链线路（m3u8/flv/ts…）→ 原生硬解直接播 */
       if(why==="首条"){
-        for(var z2=0; z2<cur.urls.length; z2++){
+        for(var z2=0; z2<nU; z2++){
           if(WVTCore.isDirect(cur.urls[z2])){ pick=z2; why="直链"; break; }
         }
       }
-      /* ③ v2.10.23 可嗅探线路优先（★ 地方卫视的大头，实测数据）：
+      /* ③ v2.10.24 上次在这个频道「真出过首帧」的那条线路（按 URL 记）。
+         比任何静态排序都可信 —— 它带着这台设备、这个网络环境下的实证。 */
+      if(why==="首条"){
+        var gz = wvtGoodGet(cur.id, cur.urls);
+        if(gz >= 0 && !wvtBadIs(cur.urls[gz])){ pick=gz; why="上次可用"; }
+      }
+      /* ④ v2.10.23 可嗅探线路优先（★ 地方卫视的大头，实测数据）：
          卫视 49 个频道里 47 个是「纯网页线路」，而它们的**第 1 条几乎都是
          央视系 yangshipin** —— 央视系推的是私有 CDRM 加扰流，提取出来必花屏，
          只能等官网页自己用 WASM+MSE 软解起播（江苏卫视实测 7008ms）。
@@ -829,8 +838,16 @@ function openChannel(tid, id, name){
          所以只要这条线路的域在白名单（sniffIsSafe），就压过央视系。
          原生不可用（老内核/关嗅探）时不启用 —— 那时切过去也没人接。 */
       if(why==="首条" && canExt){
-        for(var z3=0; z3<cur.urls.length; z3++){
-          if(sniffIsSafe(cur.urls[z3])){ pick=z3; why="可嗅探"; break; }
+        for(var z3=0; z3<nU; z3++){
+          if(sniffIsSafe(cur.urls[z3]) && !wvtBadIs(cur.urls[z3])){ pick=z3; why="可嗅探"; break; }
+        }
+      }
+      /* ⑤ 兜底：第一条近期没被判死的线路（正常情况下就是第 0 条）。
+         ★ v2.10.24：有了「判死记忆」才敢把某条线路长期排前 —— 万一它在这台
+         设备/这个网络下起不来，10 分钟内不必再陪它跑一遍看门狗。 */
+      if(why==="首条"){
+        for(var z4=0; z4<nU; z4++){
+          if(!wvtBadIs(cur.urls[z4])){ pick=z4; why=(z4===0 ? "首条" : "跳过失败线路"); break; }
         }
       }
     }catch(e){}
@@ -956,6 +973,65 @@ var BAD_LINE = {};
 function badLineIs(key, idx){
   var m = BAD_LINE[key];
   return !!(m && m[idx] && Date.now() - m[idx] < 600000);
+}
+
+/* ★ v2.10.24 官方源「上次真出过首帧的线路」记忆。
+   官方源过去完全不吃 GOOD_LINE（tid==="wvt" 被显式排除），CCTV-1 这种三条
+   线路的频道每次进来都从第 0 条重试。这里单独记一份，而且**存 URL 不存下标**：
+   联网刷新 / 上游改表都会重排线路，下标会指到别的线路上，URL 不会。
+   换个网络环境（家里/外面）线路可用性会变，所以只在 markFirstFrame 写入，
+   每次失败（nextLine）就删 —— 永远以「最近一次真的出过画」为准。 */
+var WVT_GOOD = {};
+try{ var _wgz = localStorage.getItem("tv_wvt_good");
+     if(_wgz) WVT_GOOD = JSON.parse(_wgz) || {}; }catch(e){ WVT_GOOD = {}; }
+function wvtGoodSave(){
+  try{ localStorage.setItem("tv_wvt_good", JSON.stringify(WVT_GOOD)); }catch(e){}
+}
+function wvtGoodPut(id, url){
+  if(!url) return;
+  WVT_GOOD[String(id)] = url;
+  var ks = Object.keys(WVT_GOOD);
+  if(ks.length > 80) delete WVT_GOOD[ks[0]];
+  wvtGoodSave();
+}
+function wvtGoodGet(id, urls){
+  try{
+    var u = WVT_GOOD[String(id)];
+    if(!u) return -1;
+    for(var i=0;i<urls.length;i++){ if(urls[i]===u) return i; }
+  }catch(e){}
+  return -1;      /* 记的线路已不在表里（上游换源）→ 自然回落到默认顺序 */
+}
+function wvtGoodDel(id){
+  try{ delete WVT_GOOD[String(id)]; wvtGoodSave(); }catch(e){}
+}
+
+/* ★ v2.10.24 官方源「判死」记忆（按 URL，10 分钟 TTL）。
+   静态排序把 tv.cctv.com 排到第一是有实测依据的，但换台/换网络后个别线路
+   确实会起不来。没有这份记忆的话，那条线路每次进频道都要再陪跑一遍看门狗
+   （8~20s）。判死只针对「URL + 10 分钟」，不影响别的频道，也不写盘到别的 key。 */
+var WVT_BAD = {};
+try{ var _wbz = localStorage.getItem("tv_wvt_bad");
+     if(_wbz) WVT_BAD = JSON.parse(_wbz) || {}; }catch(e){ WVT_BAD = {}; }
+function wvtBadIs(url){
+  try{
+    var t = WVT_BAD[url];
+    return !!(t && (Date.now() - t) < 600000);
+  }catch(e){ return false; }
+}
+function wvtBadMark(url){
+  if(!url) return;
+  try{
+    var now = Date.now(), keep = {}, ks = Object.keys(WVT_BAD);
+    for(var i=0;i<ks.length;i++){
+      if(now - WVT_BAD[ks[i]] < 600000) keep[ks[i]] = WVT_BAD[ks[i]];
+    }
+    keep[url] = now;
+    WVT_BAD = keep;
+    ks = Object.keys(WVT_BAD);
+    if(ks.length > 60) delete WVT_BAD[ks[0]];
+    localStorage.setItem("tv_wvt_bad", JSON.stringify(WVT_BAD));
+  }catch(e){}
 }
 function cacheLine(key, best){
   LINE_CACHE[key] = { best: best, ts: Date.now() };
@@ -1233,8 +1309,15 @@ function armStartWatch(){
 function markFirstFrame(){
   NATIVE.firstFrame = true; clearStartWatch(); __autoHopN = 0; hideStatus();
   /* ★ v2.10.20：记住本机源这条「真出过首帧」的线路 —— 下次进同一个频道
-     立刻从它起播，不等测速窗（见 openChannel 的本机源分支）。 */
-  try{ if(cur.tid && cur.tid!=="wvt" && cur.idx>=0) goodLinePut(cur.tid+"/"+cur.id, cur.idx); }catch(e){}
+     立刻从它起播，不等测速窗（见 openChannel 的本机源分支）。
+     ★ v2.10.24：官方源也记（WVT_GOOD，按 URL），下次进频道直接压过静态排序。 */
+  try{
+    if(cur.tid === "wvt"){
+      if(cur.idx >= 0 && cur.urls && cur.urls[cur.idx]) wvtGoodPut(cur.id, cur.urls[cur.idx]);
+    }else if(cur.tid && cur.idx >= 0){
+      goodLinePut(cur.tid+"/"+cur.id, cur.idx);
+    }
+  }catch(e){}
   /* ★ v2.10.15 直连缓存：首帧确认 → 撤快速回退定时器 + 给缓存续命 */
   if(EXTC.trying){
     EXTC.trying = false; clearTimeout(EXTC.t); EXTC.t = null; EXTC.webUrl = "";
@@ -2075,8 +2158,17 @@ function nextLine(silent){
   if(__sessionClosed) return;
   PICK_SEQ++;          /* ★ v2.10.20：换线决定优先于在途测速结果，作废它 */
   /* ★ v2.10.20：当前这条线路已被现实证伪（超时/报错）→ 撤掉它的实证资格与
-     测速缓存，下次进这个频道别再从它起播。 */
-  try{ if(cur.tid!=="wvt") goodLineDrop(cur.tid+"/"+cur.id, cur.idx); }catch(e){}
+     测速缓存，下次进这个频道别再从它起播。
+     ★ v2.10.24：官方源也要撤，而且要按 URL 记进 WVT_BAD（10 分钟内不再排前）——
+     否则「静态排序把它排第一 + 它在这台设备起不来」会变成每次 8~20s 的固定浪费。 */
+  try{
+    if(cur.tid === "wvt"){
+      wvtGoodDel(cur.id);
+      if(cur.urls && cur.idx >= 0 && cur.idx < cur.urls.length) wvtBadMark(cur.urls[cur.idx]);
+    }else{
+      goodLineDrop(cur.tid+"/"+cur.id, cur.idx);
+    }
+  }catch(e){}
   var i = cur.idx;
   if(i+1 < cur.urls.length){
     /* silent：调用方（起播看门狗）已经报过原因了，别叠两条 toast */
