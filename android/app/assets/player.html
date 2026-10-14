@@ -2380,6 +2380,9 @@ function bindTouchGestures(){
     if(inCtrl(e.target)) return;
     /* v2.10.9：原生单击唤浮层的手势，同一次 click 不再切控制条 */
     if(Date.now() - (window.__nativeTapAt||0) < 400) return;
+    /* ★ v2.10.36：浮层刚关的这一拍，任何 click 都不再参与「双击 → 全屏」判定。
+       连点的第二下落到这里时 anyOvOpen() 已是 false，不挡就会判成双击全屏。 */
+    if(Date.now() - (__ovClosedAt||0) < OV_QUIET) return;
     /* v2.10：浮层开着时不在这里处理 —— 点击交给 .ov 自己的 click listener
        （频道项 onclick 换台 / 空白处关闭）。★ 不能在这里 closeAllOv：
        pointerup 先把浮层 display:none 的话，后续 click 落不到频道项上，
@@ -2571,9 +2574,32 @@ function closeAllOv(){
   var was = anyOvOpen();
   clearTimeout(__ovAutoT); __ovAutoT=null;
   closeChOv(); closeSetOv();
-  /* 官网页层（pageView）为 UI 让位时被降了 alpha -> 没有别的 UI 就恢复它 */
-  if(was){ syncDimmer(); }
+  /* ★ v2.10.36：记下「刚关过」的时刻（连点防抖的地面真值）。
+     根因实测（tools/_probe_ovtap.py）：closeAllOv() 一执行，.ov 立刻 display:none，
+     原生 __nativeTapOverlay 的 elementFromPoint 马上就返回「视频空白」—— 于是
+     连点的第二下被原生当成「点空白」，左半屏 → 直接 openChOv() 弹出频道列表；
+     再点几下就落到频道项上换台（用户原话：「点两次频道列表莫名弹出 / 点多了
+     莫名其妙换频道」）。这条时间戳就是让原生知道「浮层刚关，别当空白」。 */
+  if(was){
+    __ovClosedAt = Date.now();
+    /* 同步告诉原生（不等它的下一次 evaluateJavascript）：这条路是给
+       fireOverlayIfFree 那条「加载中捷径」用的 —— 捷径不问网页，只能靠这里
+       传过去。见 MainActivity.gOvClosedT。 */
+    try{ if(window.NativeTV && NativeTV.notifyOvClosed) NativeTV.notifyOvClosed(); }catch(e){}
+    syncDimmer();
+  }
 }
+/** 浮层刚关闭时刻；OV_QUIET 内一律不把点击当「视频空白」（见 __nativeTapOverlay） */
+var __ovClosedAt = 0;
+/* ★ 700ms 不是随手取的：真人「点一下没反应 → 再点一下」的间隔实测在 400~700ms
+   （tools/_probe_ovtap.py 里两下 input tap 相隔 449ms，人手只会更慢）。早先按
+   300ms（对齐双击阈值）定，实测拦不住 —— 第二下照样把频道列表叫出来。
+   而正常「关掉浮层 → 看一眼 → 再开另一个」的手感间隔都在 1s 以上，700ms 只吃
+   连点，不误伤正常操作。 */
+var OV_QUIET = 700;
+/** 浮层刚打开时刻起的防误关窗（见 ovClickClose） */
+var OV_GUARD = 320;
+var __ovGuardUntil = 0;
 /* 借鉴 WebTvLive：浮层 12 秒无操作自动关闭（播放不中断，随时可再唤出） */
 var __ovAutoT=null;
 function ovAutoKeep(){
@@ -2589,8 +2615,13 @@ window.__overlayBack = function(){
 
 /* 浮层空白处点击 = 关闭（频道项/设置项的 onclick 在 target 阶段先执行，
    冒泡到这里时已处理完，重复 closeAllOv 无害）。
-   __ovGuardUntil：原生长按手势唤出浮层后的防误触窗 —— 同一手势抬起产生的
-   click 落在浮层空白处，不设窗的话浮层刚打开就被这个 click 关掉（实测踩到）。 */
+   __ovGuardUntil：浮层**刚打开**时的防误触窗 —— 同一次手势抬起产生的 click
+   若晚到（evaluateJavascript 是异步的），不设窗浮层会被自己的点击秒关。
+   ★ v2.10.36 从 900ms 收到 320ms：900 是 v2.10.9 时期「原生长按唤浮层」的
+   遗留值，而 v2.10.25 起浮层改由**单击**唤出、且 fireOverlay 在异步回调里执行
+   —— 同次手势的 click 几乎总是先于浮层显示到达，本来误关不了。900ms 只剩误伤：
+   实测开浮层后 250ms 点空白必定被吞（就是用户说的「第一次关不掉」）。
+   现在只留 320ms 挡真正的双击连击。 */
 function ovClickClose(e){
   if(Date.now() < (window.__ovGuardUntil||0)) return;
   if(e.target.closest && (e.target.closest(".chi") || e.target.closest(".cat") || e.target.closest(".opt") || e.target.closest(".sec") || e.target.closest(".sopt"))) return;
@@ -2605,6 +2636,12 @@ try{ $("chOv").addEventListener("click", ovClickClose); $("setOv").addEventListe
    坐标是原生物理像素，要按 devicePixelRatio 换算成 CSS 像素。 */
 window.__nativeTapOverlay = function(px, py){
   try{
+    /* ★ v2.10.36 连点防抖：浮层刚关（.ov 已 display:none）的这一小段里，
+       elementFromPoint 会立刻回报「视频空白」，原生的下一次单击就会照
+       「左半屏=频道列表 / 右半屏=设置」再开一个新浮层 —— 用户点一下关不掉、
+       点两下弹出频道列表、点多了换台，全是这一条。返回 false = 当作「点在
+       可交互 UI 上」，原生这一次就不插手（这一下本来就该被吃掉）。 */
+    if(Date.now() - (__ovClosedAt||0) < OV_QUIET) return false;
     var dpr = window.devicePixelRatio || 1;
     var el = document.elementFromPoint(px / dpr, py / dpr);
     if(!el) return true;                     /* 视频区空白 → 唤 */
@@ -2752,6 +2789,7 @@ function openChOv(){
      浮层一开就把控制条收掉，关浮层后画面干净，控制条要靠长按再唤。 */
   $("ctrl").classList.add("hide");
   $("chOv").classList.add("show");
+  __ovGuardUntil = Date.now() + OV_GUARD;   /* 见 ovClickClose 注释 */
   /* 官网页盖在浮层上面：临时降 alpha（只让位，页面媒体继续跑） */
   syncDimmer();
   renderChOvSrc(); renderChOvCats(); renderChOvChs();
@@ -2765,6 +2803,7 @@ function openSetOv(){
   $("ctrl").classList.add("hide");        /* 同上：不与控制条叠加 */
   renderSetPanel();
   $("setOv").classList.add("show");
+  __ovGuardUntil = Date.now() + OV_GUARD;
   syncDimmer();
   ovAutoKeep();
 }

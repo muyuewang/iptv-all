@@ -75,6 +75,61 @@ public class MainActivity extends Activity {
     private long gDownT;
     private boolean gDragged;
 
+    /* ---------------- v2.10.36 「刚点过浮层」静默窗 ----------------
+       用户反馈三连现象：设置浮层弹出后「点空白第一次关不掉 → 点两次 → 频道列表
+       莫名弹出 → 点多了莫名换台」。
+
+       第二下的成因：原生看的是 elementFromPoint 的**当前**状态，而网页
+       closeAllOv() 是由 click 触发的（比原生 ACTION_UP 晚约 250ms）。第一下
+       把浮层关掉这件事，在第二下做判定时还没落地 —— 原生看过去是「视频空白」，
+       左半屏 → 直接 openChOv()，频道列表就这么冒出来了。
+
+       ★ 判据必须是「上一次点击**落在了浮层上**」，不是「上一次点过屏幕」：
+         · 落在浮层上（多半是在关它）→ 记时间戳，之后的 OV_QUIET_MS 内点空白
+           一律不唤浮层；
+         · 落在空白上（多半是在开它）→ 不记，否则「开浮层 → 立刻点空白关掉」
+           这种连贯操作会被自己的冷却挡住（实测两下只隔 250ms）。
+       700ms 与网页侧 OV_QUIET 同值，取实测：探针两下 tap 相隔 449ms，
+       而正常「关掉 → 看一眼 → 再开另一个」的手感间隔在 1s 以上。 */
+    private long gLastOvHitT = 0;
+    private static final long OV_QUIET_MS = 700;
+
+    /* ---------------- v2.10.36 「浮层刚关」的原生侧地面真值 ----------------
+       上面 gLastOvHitT 只在「走完 __nativeTapOverlay 判定」时才有机会记一笔，
+       可 fireOverlayIfFree 有一条**捷径**（官方页加载中直接 fireOverlay、不问网页），
+       当 pageView 一直没报 pagePlaying() 时（央视系 WASM/MSE 页面的注入脚本判不出
+       起播就是这种），这条捷径在**整个播放期间**都生效 —— 于是静默窗被整条绕过，
+       连点的第二下照样把频道列表叫出来（tools/_probe_ovtap_rep.py 实测 6/6 复现，
+       logcat 里一条 tapFire 都没有，就是走了捷径的铁证）。
+       所以「浮层刚关」这件事必须在原生侧也落地一份：网页 closeAllOv() 会同步调
+       notifyOvClosed()（JS→Java 直接调用，不等 runOnUiThread），这里记下时刻。
+       ★ 它现在只喂连击串（muteBurst），不再参与 inOvQuiet 的固定窗 —— 见那里。 */
+    private long gOvClosedT = 0;
+
+    /** 静默窗内（上一击刚落在浮层上）→ 这一下不唤浮层。
+     *  ★ 只看 gLastOvHitT（在 evaluateJavascript 回调里记，紧跟 ACTION_UP），
+     *    **不看** gOvClosedT：后者记在网页 closeAllOv() 里，要等 WebView 把
+     *    click 处理完，比 UP 晚约 250ms；WebView 一忙（模拟器高负载实测可到 1s+）
+     *    就会把静默窗拖长，把之后的正常点击也挡掉 —— 实测 1/5 概率「关掉浮层
+     *    1.5s 后再点也开不了」。gOvClosedT 现在专职喂连击串（见 muteBurst）。 */
+    private boolean inOvQuiet() {
+        long now = android.os.SystemClock.uptimeMillis();
+        return (now - gLastOvHitT < OV_QUIET_MS);
+    }
+
+    /* ★ 上面是「距上次事件多久」的固定窗，可探针实测：连点的间隔会被系统开销拉到
+       1.1s 以上（adb input tap 单次开销就有几百 ms），固定窗再怎么调都有漏网的。
+       所以再加一层**连击序列**跟踪：把间隔 < BURST_GAP 的连续点击视为「手指这一串」，
+       这一串里只要发生过「关掉浮层」或「点中浮层」，剩下的点击一律不再开新浮层 ——
+       手指没停就说明用户没打算开新的。停手超过 BURST_GAP 才开始新的一串。 */
+    private long gLastTapT = 0;
+    private int gBurstN = 0;
+    private boolean gBurstMuted = false;
+    private static final long BURST_GAP = 800;
+
+    /** 这一串连点里已经关过/点中过浮层 —— 后续连点不再开新浮层 */
+    private void muteBurst() { gBurstMuted = true; }
+
     /* ---------------- v2.10.25 长按 = 控制条 ----------------
        用户定稿：单击归浮层（左半屏=频道列表 / 右半屏=设置），**长按**归控制条
        （线路/暂停/比例/全屏）。
@@ -109,9 +164,12 @@ public class MainActivity extends Activity {
         ovOpenUI = true;
         /* ★ v2.10.11：官方页未起播保持 alpha 0（黑底过渡中），别把原始网页拉到 0.35 */
         try { if (pageView != null && pagePlayingSeen) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
-        // __ovGuardUntil：抬起产生的 click 别把刚打开的浮层关掉；__nativeTapAt 挡住
-        // 同一次单击在网页 onTap 里的「切控制条」动作
-        jsApp("window.__ovGuardUntil=Date.now()+900;window.__nativeTapAt=Date.now();"
+        // __nativeTapAt 挡住同一次单击在网页 onTap 里的「切控制条」动作。
+        // ★ v2.10.36：__ovGuardUntil 不再在这里设 —— 移到网页侧 openChOv/openSetOv
+        //   内部（只在真正新开时设，320ms）。过去在原生侧无条件设 900ms，浮层开着
+        //   时重复点空白也会被刷新，实测开浮层后 250ms 内点空白必定被吞（用户
+        //   反馈的「第一次关不掉」）。
+        jsApp("window.__nativeTapAt=Date.now();"
             + "try{" + (right ? "openSetOv&&openSetOv()" : "openChOv&&openChOv()") + "}catch(e){}");
     }
 
@@ -130,7 +188,13 @@ public class MainActivity extends Activity {
                 按钮都会顺带弹出频道列表浮层；
              ② 补 !ovOpenUI —— 控制条亮着时也必须走 JS 落点判定，否则点在
                 「暂停」上照样弹浮层（控制条=ovOpenUI 见 syncDimmer）。 */
-        if (pageView != null && !pagePlayingSeen && !ovOpenUI) { fireOverlay(right); return; }
+        /* ★ v2.10.36：捷径也得过静默窗 —— 见 gOvClosedT 注释。加载中本来就没有
+           浮层，静默窗那时不会生效，不影响它「快点响应」的初衷。 */
+        if (pageView != null && !pagePlayingSeen && !ovOpenUI) {
+            if (inOvQuiet()) return;
+            fireOverlay(right);
+            return;
+        }
         android.util.Log.i("CleanTV/LC", "tapFire right=" + right + " x=" + (int) x + " y=" + (int) y);
         try {
             web.evaluateJavascript(
@@ -138,7 +202,17 @@ public class MainActivity extends Activity {
                     + (int) x + "," + (int) y + "):1)?'1':'0'}catch(e){'1'}",
                 new android.webkit.ValueCallback<String>() {
                     @Override public void onReceiveValue(String v) {
-                        if (v != null && v.indexOf("0") >= 0) return;   // 命中 UI，跳过
+                        long now = android.os.SystemClock.uptimeMillis();
+                        if (v != null && v.indexOf("0") >= 0) {
+                            /* 落在浮层 / 控制条等 UI 上（多半就是「点空白关掉浮层」
+                               那一下）→ 记一笔，开启静默窗并静音这一串连点。
+                               触摸照常走下面的分发，由网页 click 完成真正的关闭。 */
+                            gLastOvHitT = now;
+                            muteBurst();
+                            return;
+                        }
+                        /* 空白：静默窗内（浮层刚关 / 上一击刚落在浮层上）不唤 */
+                        if (inOvQuiet()) return;
                         fireOverlay(right);
                     }
                 });
@@ -179,7 +253,19 @@ public class MainActivity extends Activity {
                 if (gLpFired) {
                     /* 长按：什么都不做 */
                 } else if (!gDragged && ev.getEventTime() - gDownT < 450) {
-                    fireOverlayIfFree(gDownX * 2 > Math.max(1, root.getWidth()), gDownX, gDownY);
+                    /* ★ v2.10.36 连击序列：见 gBurstMuted 注释。先归串，再决定。 */
+                    long now = ev.getEventTime();
+                    if (now - gLastTapT >= BURST_GAP) {
+                        gBurstN = 1;
+                        gBurstMuted = false;      /* 停手了 —— 新的一串 */
+                    } else {
+                        gBurstN++;
+                    }
+                    gLastTapT = now;
+                    if (!gBurstMuted) {
+                        fireOverlayIfFree(
+                            gDownX * 2 > Math.max(1, root.getWidth()), gDownX, gDownY);
+                    }
                 }
                 break;
             case MotionEvent.ACTION_CANCEL:
@@ -494,15 +580,33 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean hasWebPage() { return true; }
 
+        /** v2.10.36：网页 closeAllOv() 关掉浮层时**同步**通知原生（见 gOvClosedT）。
+         *  ★ 为什么不复用 setPageOverlay(false)：后者在「控制条 6 秒自动隐藏」时也会
+         *    被 syncDimmer 调到，语义是「没有 UI 需要透出」而不是「浮层关了」——
+         *    拿它当时戳会让控制条消失后 700ms 内的点击也被静默窗吃掉。 */
+        @JavascriptInterface
+        public void notifyOvClosed() {
+            gOvClosedT = android.os.SystemClock.uptimeMillis();
+            muteBurst();      /* 这一串连点里已经关过浮层了 → 剩下的连点不再开新的 */
+        }
+
         /** v2.10：半透明浮层开/关 —— 开时把官方页降到 0.35 alpha（媒体继续渲染），关时恢复。
          *  ★ v2.10.11：官方页**起播前**（pagePlayingSeen=false，还在黑底过渡 alpha 0）
          *  不得见光 —— 实测加载中点击唤出浮层，alpha 被拉到 0.35/恢复 1，原始网页和
          *  原始播放器就透出来了。未起播时开/关都维持 0，起播后 fadeInPage 自然接管。 */
         @JavascriptInterface
         public void setPageOverlay(final boolean on) {
+            /* ★ v2.10.36：ovOpenUI **必须同步先设**，不能等 runOnUiThread 排到。
+               网页 closeAllOv() → syncDimmer() → 这里，是 JS→Java 的直接调用；
+               若把赋值放进 Runnable，从「.ov 变 display:none」到「ovOpenUI 翻假」
+               之间就存在一个消息队列往返的窗口。这个窗口里 UP 会拿陈旧标记做
+               决定：官网源下走 !pagePlayingSeen 捷径直接 fireOverlay，或把触摸
+               转发给已关的浮层 —— 正是「点一下关不掉、点两下弹出频道列表」的
+               另一半成因（另一半是网页侧缺少 __ovClosedAt 闸门）。 */
+            ovOpenUI = on;
             runOnUiThread(new Runnable() {
                 @Override public void run() {
-                    ovOpenUI = on;   /* 与触摸转发闸门同步（见 ovOpenUI 注释）；pageView 为 null（本机源）也要更新 */
+                    ovOpenUI = on;   /* 再设一次：UI 线程上保证与 alpha 同步落地 */
                     try {
                         if (pageView != null) {
                             if (!pagePlayingSeen) { pageView.setAlpha(0f); }
