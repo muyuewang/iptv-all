@@ -163,7 +163,7 @@ public class MainActivity extends Activity {
     private void fireOverlay(boolean right) {
         ovOpenUI = true;
         /* ★ v2.10.11：官方页未起播保持 alpha 0（黑底过渡中），别把原始网页拉到 0.35 */
-        try { if (pageView != null && pagePlayingSeen) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
+        try { if (!PAGE_UNDER_WEB && pageView != null && pagePlayingSeen) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
         // __nativeTapAt 挡住同一次单击在网页 onTap 里的「切控制条」动作。
         // ★ v2.10.36：__ovGuardUntil 不再在这里设 —— 移到网页侧 openChOv/openSetOv
         //   内部（只在真正新开时设，320ms）。过去在原生侧无条件设 900ms，浮层开着
@@ -274,7 +274,7 @@ public class MainActivity extends Activity {
         }
         /* ★ 浮层开着：触摸绕过半透明的 pageView，直接送主 WebView（长按手势检测在上面已做完，
            状态一致，整段事件流都走同一条路）。 */
-        if (ovOpenUI && web != null) {
+        if (!PAGE_UNDER_WEB && ovOpenUI && web != null) {
             try { web.dispatchTouchEvent(ev); } catch (Throwable ignore) {}
             return true;
         }
@@ -283,7 +283,7 @@ public class MainActivity extends Activity {
            就「凭空生效」（用户实测：加载中点不动，加载完乱跳）。直接吞掉 ——
            唤浮层已在上面 UP 分支处理完（ovOpenUI=true 走不到这里）。
            ★ 不能用 INVISIBLE：会触发 Chromium 引擎级暂停，页面起播判定可能死锁。 */
-        if (!pagePlayingSeen && pageView != null) {
+        if (!PAGE_UNDER_WEB && !pagePlayingSeen && pageView != null) {
             return true;
         }
         return super.dispatchTouchEvent(ev);
@@ -297,6 +297,27 @@ public class MainActivity extends Activity {
      * 若这段时间里已经开了新的一页（换下一条线路就是这种），代次对不上就直接放弃，
      * 免得把新页面拆了。
      */
+    /**
+     * ★ v2.10.37 试验开关：true = 官方页 pageView 挂在主 WebView **之下**（路线 A 简化试验）。
+     *
+     * 现状（false）的代价：官方页在最上层，我们的 UI（控制条 / 浮层 / 确认卡）全在
+     * 下面的主 WebView 上 → 为了「让 UI 透出来 + 把触摸绕回去」长出了一整套补丁：
+     * syncDimmer / setPageOverlay / notifyOvClosed 三个桥，ovOpenUI、gLastOvHitT、
+     * gOvClosedT、gLastTapT、gBurstN、gBurstMuted 六个原生字段，__ovClosedAt、
+     * __ovGuardUntil、__nativeTapAt、__nativeTapOverlay 四个网页补丁。
+     *
+     * 改成 true 之后：主 WebView 播放时本来就是透明的（frame-on），官方页画面照样
+     * 透出来；UI 天然在上面，触摸天然走主 WebView，落点判定退化成一句
+     * document.elementFromPoint —— 上面那 13 项全部可以删掉。
+     *
+     * ⚠ 唯一待验证风险：Android 的遮挡检测不知道「盖在上面的窗口是透明的」，
+     *   官方页可能被判定为不可见 → 触发 Chromium 引擎级暂停媒体
+     *   （就是我们踩过的 setVisibility(INVISIBLE) 那条坑的自动版）。
+     *   验证方法：官网源网页线路起播后，观察 30s 内是否持续出帧（截图对比）。
+     *   验证通过后：删除本开关，按 true 分支清理上述补丁；验证失败则整段回退。
+     */
+    private static final boolean PAGE_UNDER_WEB = true;
+
     private int pageSeq = 0;
     /** 本页是否已经报过「起不来」；成功起播或换页时复位，避免反复触发切线路 */
     private boolean pageFailedSent = false;
@@ -609,7 +630,10 @@ public class MainActivity extends Activity {
                     ovOpenUI = on;   /* 再设一次：UI 线程上保证与 alpha 同步落地 */
                     try {
                         if (pageView != null) {
-                            if (!pagePlayingSeen) { pageView.setAlpha(0f); }
+                            if (PAGE_UNDER_WEB) {
+                                /* 官方页在主 WebView 之下：UI 天然盖在它上面，
+                                   不需要「降 alpha 让 UI 透出来」，画面也不该被调暗。 */
+                            } else if (!pagePlayingSeen) { pageView.setAlpha(0f); }
                             else {
                                 /* ★ v2.10.3：降 alpha 不 INVISIBLE —— INVISIBLE 会触发
                                    Chromium 引擎级暂停媒体（onVisibilityChanged），
@@ -1103,10 +1127,22 @@ public class MainActivity extends Activity {
         } catch (Throwable ignore) { pageUaNow = UA_PC; }
         try { v.stopLoading(); } catch (Throwable t) {}
         if (v.getParent() == null) {
-            root.addView(v, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            if (PAGE_UNDER_WEB && web != null) {
+                /* 插到主 WebView 之前 = 主 WebView 之下（root 是 FrameLayout，
+                   插入顺序即 z 序）。此时主 WebView 透明（frame-on），画面照常透出。 */
+                int at = root.indexOfChild(web);
+                root.addView(v, at >= 0 ? at : 0, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            } else {
+                root.addView(v, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
         }
-        v.bringToFront();
+        if (PAGE_UNDER_WEB) {
+            try { if (web != null) web.bringToFront(); } catch (Throwable ignore) {}
+        } else {
+            v.bringToFront();
+        }
         v.loadUrl(url);
         /* ★ v2.10.8 过渡：官方页先压在黑底下面（alpha 0）。页面从加载→白底渲染→
            自家转圈→未起播海报（大播放键 + 「× 返回」）这一整段丑态全部不见天日，
@@ -1133,7 +1169,7 @@ public class MainActivity extends Activity {
      *  浮层关闭走 setPageOverlay(false) 恢复 1。 */
     private void fadeInPage() {
         if (pageView == null) return;
-        if (ovOpenUI) return;
+        if (!PAGE_UNDER_WEB && ovOpenUI) return;
         try {
             if (pageView.getAlpha() >= 1f) return;
             pageView.animate().alpha(1f).setDuration(450).start();

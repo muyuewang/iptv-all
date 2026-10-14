@@ -1839,6 +1839,12 @@ function playWebLine(url, i){
     var extra = (cur.extra && cur.extra[i]) || "";
     if(webState !== 2) webState = 1;         /* 2 = 正在自动切线路，保留原状态 */
     window.__userExit = false;               /* ★ 新开一页：清掉上一轮的「用户退出」标志 */
+    /* ★ v2.10.37 层序试验（PAGE_UNDER_WEB）：官方页在主 WebView **之下**，
+       而 nativeStop()（上面刚调过）会 clearFrameOn() 把 WebView 变回不透明 ——
+       旧层序无所谓（官方页最后 bringToFront 盖在最上层），新层序下主 WebView
+       的黑底会把官方页整个挡住（实测全黑、页面其实正常在播）。
+       开官方页前必须重新转透明。 */
+    setFrameOn();
     $("webmask").classList.add("show");
     /* ★ v2.10.8：状态页统一接管加载期视觉（z500 盖住 webmask）——
        频道号 + 频道名 + 渐进状态行，黑底无转圈海报。webmask 留着是
