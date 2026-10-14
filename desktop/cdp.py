@@ -412,8 +412,11 @@ def kill_browser(proc, udd=None, keep_profile=False):
         try:
             if IS_WIN:
                 # /T 连子孙一起杀，避免残留 msedge 渲染进程
+                # ★ 必须带 CREATE_NO_WINDOW：taskkill 是控制台程序，不带会
+                #   在用户桌面闪一个 SYSTEM32\taskkill.exe 黑窗（实测出现）。
                 subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=0x08000000,      # CREATE_NO_WINDOW
                                timeout=15)
             else:
                 import signal as _sig
@@ -854,35 +857,40 @@ class Sniffer:
 
 def sniff_stream(page_url, timeout=28, headless=False, offscreen=True,
                  ua_mobile=False, log=None, session=None, profile_dir=None,
-                 keep_session=True, retry_visible=True):
+                 keep_session=True, retry_visible=False):
     """
     便捷入口：嗅探一个官方直播页，返回 {url, headers} 或 None。
 
     默认复用全局浏览器实例（keep_session=True）—— 第二次起只要几秒，
     首次会付出一次浏览器冷启动的成本。
 
-    策略：先用「离屏窗口」试（不打扰用户）；失败再换「可见窗口」重试一次
-    —— 少数站点在离屏/后台状态下会拒绝起播。
+    策略：先用「离屏窗口」试；未命中**换一个全新的一次性离屏实例**再试
+    （首试复用的全局实例状态可能已坏）。★ 绝不弹可见窗 —— 用户实测
+    可见重试窗 = 桌面凭空多出一个在播视频的浏览器，体验极差；
+    少数离屏拒播的站点宁可失败交给上层换线。
+    （retry_visible=True 仅保留给命令行调试用。）
     """
     log = log or (lambda *a: None)
     if session is None and keep_session:
         session = default_session(profile_dir=profile_dir, log=log,
                                   offscreen=offscreen)
 
-    plans = [(offscreen, headless)]
     if headless:
-        plans = [(False, True), (False, False)]
-    elif retry_visible:
+        plans = [(False, True), (False, False)] if retry_visible \
+            else [(False, True)]
+    elif retry_visible:                       # 调试用：老的可视重试策略
         plans = [(True, False), (False, False)]
+    else:
+        # 第二次换全新一次性离屏实例（use=None 强制新开，见循环内）
+        plans = [(True, False), (True, False)]
 
     for i, (off, hl) in enumerate(plans):
         if i:
-            log("  首次未命中，改用可见窗口重试 ...")
-        if session is not None and not off:
-            # 复用实例是离屏的，可见窗口场景交给一次性实例
-            use = None
-        else:
-            use = session
+            log("  首次未命中，%s ..." % ("改用可见窗口重试" if not off
+                                          else "换全新离屏实例重试"))
+        # 重试一律用一次性新实例：复用刚失败过的实例没有意义；
+        # 可见窗场景也必须新开（全局实例是离屏的）
+        use = session if (session is not None and i == 0) else None
         s = Sniffer(page_url, headless=hl, offscreen=off,
                     ua_mobile=ua_mobile, timeout=timeout, log=log, session=use)
         try:
