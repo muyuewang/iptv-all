@@ -1031,6 +1031,13 @@ class NativeApp:
         #   点频道时直接导航 —— 与安卓端 v2.10.16 的 pageView 预热同一思路。
         self.root.after(4000, self._warm_embed)
 
+        # ★ v2.10.42 嗅探浏览器预热 + 闲置回收：gdtv 这类页面在内嵌 WebView2
+        #   里因广告延迟 + Chromium 后台节流要 40s+ 才起播，并行嗅探 5s 就
+        #   接管 —— 但 Edge 冷启动要 8s。提前拉起热实例，慢源频道 ~30s →
+        #   ~15s 出画；闲置 10 分钟自动回收内存，下次要用自动再起。
+        self.root.after(8000, self._prewarm_sniff)
+        self.root.after(90000, self._sniff_reaper)
+
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _warm_embed(self):
@@ -1061,6 +1068,33 @@ class NativeApp:
                 self._log("WebView2 预热异常：%r" % (e,))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _prewarm_sniff(self):
+        """后台把嗅探浏览器拉起来待命（失败不影响正常播放路径）。"""
+        if _cdp is None:
+            return
+
+        def work():
+            try:
+                s = _cdp.default_session(
+                    profile_dir=self.sniff_dir,
+                    log=lambda *a: self._log(" ".join(str(x) for x in a)))
+                s.ensure()          # ★ 真正把 Edge 拉起来（default_session 只建对象）
+                _cdp.touch_session()
+                self._log("嗅探浏览器已预热（闲置 10 分钟自动回收）")
+            except Exception as e:      # noqa: BLE001
+                self._log("嗅探预热失败: %r" % (e,))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sniff_reaper(self):
+        """周期回收闲置嗅探浏览器（每次嗅探都会 touch，活跃期永不回收）。"""
+        try:
+            if _cdp is not None and _cdp.close_idle_session(600):
+                self._log("嗅探浏览器闲置 10 分钟，已回收（下次自动再起）")
+        except Exception:
+            pass
+        self.root.after(60000, self._sniff_reaper)
 
     # ---------------- 字体 / 主题 ----------------
     def _after_map(self, fn, args=()):
@@ -2013,6 +2047,7 @@ class NativeApp:
 
     # ---------------- 播放 ----------------
     def _open_channel(self, tid, cid, name):
+        self._close_ask_dialog()        # 任何换台动作都关掉「重试/换台」卡
         self._req += 1
         self.cur["tid"] = tid
         self.cur["id"] = cid
@@ -2409,11 +2444,116 @@ class NativeApp:
             self._show_placeholder("已退出官方页面")
 
     def _show_web_dead(self, reason=""):
-        """官网线路全部没戏了 —— 给出明确文字，不黑屏不干等。"""
+        """官网线路全部没戏了 —— 给出明确文字，并弹「重试/换台」选择卡。"""
         why = ("（%s）" % reason) if reason else ""
         self.status_lbl.configure(text="该频道官网线路均不可用%s" % why)
-        self._show_placeholder("该频道官网线路均不可用\n%s\n换个频道或按 → 试相邻频道"
-                               % ("「%s」" % reason if reason else ""))
+        self._hide_loading()
+        self._ask_retry_or_next(reason or "官网线路均不可用")
+
+    # ---------------- 「全部线路不可用」选择卡（重试 / 换台，5s 自动换） ----------------
+    def _close_ask_dialog(self):
+        w = getattr(self, "_ask_win", None)
+        if w is not None:
+            self._ask_win = None
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+    def _next_channel(self):
+        """当前可见频道列表里的下一个频道（循环）。"""
+        keys = list(self._rows.keys())
+        if not keys:
+            return
+        cur = (str(self.cur.get("tid")), str(self.cur.get("id")))
+        try:
+            nxt = keys[(keys.index(cur) + 1) % len(keys)]
+        except ValueError:
+            nxt = keys[0]
+        row, name_lbl = self._rows[nxt]
+        try:
+            name = name_lbl.cget("text")
+        except Exception:
+            name = ""
+        self._open_channel(nxt[0], nxt[1], name)
+
+    def _ask_retry_or_next(self, reason=""):
+        """频道所有线路都失败 → 弹卡让用户选：重试该频道 / 换下一频道。
+
+        5 秒未选自动换下一频道。任何换台动作（点列表、快捷键）都会走
+        _open_channel → 关掉本卡，不会残留。
+        """
+        self._close_ask_dialog()
+        tid, cid, name = self.cur.get("tid"), self.cur.get("id"), \
+            self.cur.get("name")
+        win = tk.Toplevel(self.root)
+        self._ask_win = win
+        win.overrideredirect(True)          # 沉浸式窗口风格：无系统边框
+        win.attributes("-topmost", True)
+        win.configure(bg=BG2)
+        self._ask_req = self._req           # 换台代号闸门：换台即失效
+
+        body = tk.Frame(win, bg=BG2, padx=22, pady=16)
+        body.pack()
+        tk.Label(body, text="「%s」暂时不可用" % (name or "该频道"),
+                 bg=BG2, fg=FG, font=self.F(13, True)).pack(anchor="w")
+        tk.Label(body, text=("原因：%s" % reason) if reason else "",
+                 bg=BG2, fg=FG_DIM, font=self.F(9)).pack(anchor="w", pady=(4, 10))
+        cd_lbl = tk.Label(body, text="", bg=BG2, fg=GOLD, font=self.F(10))
+        cd_lbl.pack(anchor="w")
+        btns = tk.Frame(body, bg=BG2)
+        btns.pack(anchor="e", pady=(12, 0))
+
+        def do_retry():
+            self._close_ask_dialog()
+            self._open_channel(tid, cid, name)
+
+        def do_next():
+            self._close_ask_dialog()
+            self._next_channel()
+
+        b1 = tk.Button(btns, text="重试该频道", command=do_retry,
+                       bg=BG3, fg=FG, activebackground=SEL_BG,
+                       activeforeground=FG, relief="flat",
+                       padx=14, pady=4, cursor="hand2",
+                       font=self.F(10), bd=0)
+        b1.pack(side="left", padx=(0, 10))
+        b2 = tk.Button(btns, text="换下一频道", command=do_next,
+                       bg=BRAND, fg="#ffffff", activebackground=BRAND2,
+                       activeforeground="#ffffff", relief="flat",
+                       padx=14, pady=4, cursor="hand2",
+                       font=self.F(10, True), bd=0)
+        b2.pack(side="left")
+
+        # 定位：主窗居中偏上（等层动画结束后再量一次位置）
+        def place():
+            if self._ask_win is not win:
+                return
+            win.update_idletasks()
+            try:
+                sw, sh = win.winfo_width(), win.winfo_height()
+                rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+                rw, rh = self.root.winfo_width(), self.root.winfo_height()
+                win.geometry("+%d+%d" % (rx + (rw - sw) // 2,
+                                         ry + max(40, (rh - sh) // 3)))
+            except Exception:
+                pass
+        place()
+
+        state = {"left": 5}
+
+        def tick():
+            if self._ask_win is not win or self._req != self._ask_req:
+                self._close_ask_dialog()
+                return
+            n = state["left"]
+            if n <= 0:
+                do_next()
+                return
+            cd_lbl.configure(text="%d 秒后自动换下一频道…" % n)
+            state["left"] = n - 1
+            win.after(1000, tick)
+        tick()
 
     def _stop_embed(self, hide=False, wait=False):
         """
@@ -2961,6 +3101,7 @@ class NativeApp:
                 return
             self.status_lbl.configure(text="该频道暂不可用（官网线路均失败）")
             self._hide_loading()
+            self._ask_retry_or_next("官网线路均失败")
             return
         # 本机源：所有线路都失败 -> 刷新页面拿新 token 再重试一轮
         if not self._refreshed:
@@ -2972,6 +3113,7 @@ class NativeApp:
             return
         self.status_lbl.configure(text="该频道暂不可用（线路均失败）")
         self._hide_loading()
+        self._ask_retry_or_next("线路均失败")
 
     def _stop_mpv(self):
         if self.ipc:

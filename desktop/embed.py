@@ -102,8 +102,16 @@ PC_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 #   隐藏/浏览器进程十几秒后消失。只禁 GPU 沙箱、保留硬件加速，实测稳定。
 #   （对照组实测：--disable-gpu / --use-angle=swiftshader 都救不了，
 #     --disable-gpu-sandbox 与 --no-sandbox 都能救，取前者。）
+# ★ 防后台节流三件套 + CalculateNativeWinOcclusion（v2.10.42 实测）：沉浸式
+#   无边框主窗里 WebView2 会被 Chromium 误判「被遮挡/后台」，页面 SPA 的
+#   定时器被节流 —— gdtv 页 50s 内连 <video> 都不建；关掉后 46s 能播到
+#   first frame。与 cdp.py 嗅探浏览器用同一组旗标。
 DEFAULT_EXTRA_ARGS = ("--autoplay-policy=no-user-gesture-required "
-                      "--disable-features=Translate,MediaRouter "
+                      "--disable-features=Translate,MediaRouter,"
+                      "CalculateNativeWinOcclusion "
+                      "--disable-background-timer-throttling "
+                      "--disable-backgrounding-occluded-windows "
+                      "--disable-renderer-backgrounding "
                       "--disable-gpu-sandbox")
 # 允许环境变量整体覆盖（诊断实验 / 用户自定义参数）。设为空串 = 不带任何参数。
 EXTRA_ARGS = os.environ.get("WVT_EMBED_ARGS", DEFAULT_EXTRA_ARGS)

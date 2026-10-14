@@ -678,7 +678,31 @@ def default_session(profile_dir=None, log=None, offscreen=True):
     if _DEFAULT_SESSION is None:
         _DEFAULT_SESSION = BrowserSession(profile_dir=profile_dir,
                                           log=log, offscreen=offscreen)
+        _DEFAULT_SESSION.last_used = time.time()
     return _DEFAULT_SESSION
+
+
+def touch_session():
+    """记录全局会话最近使用时间（闲置回收的判据）。"""
+    if _DEFAULT_SESSION is not None:
+        _DEFAULT_SESSION.last_used = time.time()
+
+
+def close_idle_session(max_idle=600):
+    """全局嗅探会话闲置超过 max_idle 秒就关掉（省内存）；下次用自动再起。
+
+    配合启动预热用：预热把 Edge 拉起来等在后台，慢源频道（gdtv 这类
+    内嵌 WebView2 里 40s 起播的广告延迟页）5s 一到就能用热实例嗅探。
+    用户若只看本机/直连源，10 分钟后自动回收这份内存。
+    """
+    s = _DEFAULT_SESSION
+    if s is None:
+        return False
+    lu = getattr(s, "last_used", 0)
+    if lu and time.time() - lu > max_idle:
+        close_default_session()
+        return True
+    return False
 
 
 def close_default_session():
@@ -902,6 +926,7 @@ def sniff_stream(page_url, timeout=28, headless=False, offscreen=True,
             log("  嗅探异常(%s): %r" % ("visible" if not off else "offscreen", e))
         finally:
             s.stop()
+            touch_session()
     return None
 
 
