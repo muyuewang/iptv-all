@@ -932,7 +932,6 @@ class NativeApp:
         self.cur_cat = "tv"
         self.channels = []
         self.filtered = []
-        self.search_kw = ""
         self.fav_file = os.path.join(DATA_DIR, "fav.json")
         self.fav = _core.load_fav(self.fav_file)
         self.mem_cache = {}
@@ -967,6 +966,7 @@ class NativeApp:
         self._load_base = "正在连接…"
         self._load_bar_w = None
         self._load_after = None
+        self._load_move_job = None   # 浮窗跟随播放区的去抖任务（v2.10.35）
         self._load_t0 = 0.0
         self._load_phase = None      # None(隐藏) / "in" / "hold" / "out"
         self._load_phase_t0 = 0.0
@@ -1359,14 +1359,39 @@ class NativeApp:
         self.src_bar.pack(side="left", padx=(20, 0), pady=14)
         self.src_bar.set_items([("wvt", "官网源"), ("local", "本机源")], "local")
 
-        # ★ v2.10.31 顶栏 / 左栏「一体」：分类 / 分组选择器从左侧栏**首行提到顶栏**。
-        #   以前左栏顶部单独占一行（「分组 央视 ▾ ⟳」），频道列表只能从第二行往下，
-        #   顶栏下方横着一条空档，左栏被切成「一条工具行 + 列表」两块。
-        #   现在它塞进顶栏同一格（本机源放「分类」、官网源放「分组」，互斥显示），
-        #   左栏从顶栏下面开始就是频道列表 —— 视觉上顶栏左段即左栏的头部。
-        #   宽度固定（pack_propagate(False)）：否则下拉会按 winfo_width=1 画出竖条。
-        self.filter_slot = tk.Frame(top, bg=BG, width=248, height=36)
-        self.filter_slot.pack(side="left", padx=(18, 0), pady=11)
+        # ★ v2.10.33 沉浸式：系统标题栏已被 winchrome 摘掉，窗口按钮自绘在顶栏
+        #   最右上角。★ 必须在**这一组里第一个 pack** —— side="right" 是「后
+        #   pack 的靠左」，晚一步它就排到状态文案左边去了（实测踩过）。
+        self._build_window_buttons(top)
+
+        self.status_lbl = tk.Label(top, text="", bg=BG, fg=FG_MUTE, font=self.F(9))
+        self.status_lbl.pack(side="right", padx=(8, 12))
+
+        self.settings_btn = tk.Button(top, text="⚙ 设置", bg=BG2, fg=FG_DIM,
+                                      relief="flat", bd=0, padx=12, pady=6,
+                                      activebackground=BRAND2, activeforeground="#fff",
+                                      font=self.F(10), cursor="hand2",
+                                      command=self._open_settings)
+        self.settings_btn.pack(side="right", padx=6, pady=12)
+
+        # 主体
+        body = self.body = tk.Frame(self.root, bg=BG)
+        body.pack(fill="both", expand=True)
+
+        # 左侧
+        left = self.left_panel = tk.Frame(body, bg=BG, width=344)
+        left.pack(side="left", fill="y")
+        left.pack_propagate(False)
+
+        # ★ v2.10.34：分类 / 分组选择器**回到频道列表正上方**（左栏首行）。
+        #   v2.10.31 曾把它塞进顶栏（想让顶栏左段充当左栏头部），但用户实际
+        #   用起来还是「在列表头上选」最顺手 —— 选择器与被它筛选的列表挨在一起，
+        #   眼睛不用横跨半个窗口。顶栏因此只留 logo / 源切换 / 设置 / 窗口按钮，
+        #   窄窗时也不再跟状态文案抢位置。
+        #   高度锁死（pack_propagate(False)）+ fill="x"：宽度随左栏，下拉按
+        #   winfo_width 自绘，<Configure> 会重画，不会画成竖条。
+        self.filter_slot = tk.Frame(left, bg=BG, height=40)
+        self.filter_slot.pack(fill="x", padx=12, pady=(12, 6))
         self.filter_slot.pack_propagate(False)
 
         # 本机源：分类选择器（★ v2.10.22 按用户要求改回**下拉** —— 与官网源的
@@ -1389,45 +1414,11 @@ class NativeApp:
                   padx=8, font=self.F(10), cursor="hand2", activebackground=BRAND,
                   activeforeground="#fff",
                   command=self._reload_wvt).pack(side="left", padx=(6, 0))
-        self.group_frame.pack_forget()      # 默认本机源：分组行先藏起来
+        # ★ 两个都建好之后**必须显式选一个**显示：默认源是本机源（src_mode
+        #   = local），但 _show_filter 只在切源时才被调用 —— 以前启动时这一格
+        #   是空的（顶栏那段 248px 空白 / 现在左栏那条空行就是这么来的）。
+        self._show_filter("cat")
 
-        # ★ v2.10.33 沉浸式：系统标题栏已被 winchrome 摘掉，窗口按钮自绘在顶栏
-        #   最右上角。★ 必须在**这一组里第一个 pack** —— side="right" 是「后
-        #   pack 的靠左」，晚一步它就排到状态文案左边去了（实测踩过）。
-        self._build_window_buttons(top)
-
-        self.status_lbl = tk.Label(top, text="", bg=BG, fg=FG_MUTE, font=self.F(9))
-        self.status_lbl.pack(side="right", padx=(8, 12))
-
-        self.settings_btn = tk.Button(top, text="⚙ 设置", bg=BG2, fg=FG_DIM,
-                                      relief="flat", bd=0, padx=12, pady=6,
-                                      activebackground=BRAND2, activeforeground="#fff",
-                                      font=self.F(10), cursor="hand2",
-                                      command=self._open_settings)
-        self.settings_btn.pack(side="right", padx=6, pady=12)
-
-        self.search_var = tk.StringVar()
-        se = tk.Entry(top, textvariable=self.search_var, bg=BG2, fg=FG,
-                      insertbackground=FG, relief="flat", bd=0, width=20,
-                      font=self.F(10))
-        se.pack(side="right", padx=6, pady=14, ipady=5)
-        se.bind("<KeyRelease>", self._on_search)
-        self.search_entry = se
-        self.search_icon = tk.Label(top, text="🔍", bg=BG, fg=FG_MUTE,
-                                    font=self.F(10))
-        self.search_icon.pack(side="right")
-
-        # 主体
-        body = self.body = tk.Frame(self.root, bg=BG)
-        body.pack(fill="both", expand=True)
-
-        # 左侧
-        left = self.left_panel = tk.Frame(body, bg=BG, width=344)
-        left.pack(side="left", fill="y")
-        left.pack_propagate(False)
-
-        # ★ v2.10.31：左栏顶部不再有「分类 / 分组」行 —— 它们已提到顶栏
-        #   （见 _build_ui 顶栏部分），左栏顶部直接就是频道列表。
         listwrap = tk.Frame(left, bg=BG)
         listwrap.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(listwrap, bg=BG, highlightthickness=0)
@@ -1460,10 +1451,22 @@ class NativeApp:
         self.video_host.bind("<Configure>", self._on_host_resize)
 
         # ---- 等待动画覆盖层（点击频道后给「点了/在连」的即时反馈）----
-        # place 成铺满 video_host 的一层；mpv/WebView2 的原生子窗口永远画在
-        # Tk 之上，所以起播成功后画面会自然盖住它 —— 这里再主动收掉，双保险。
-        # 结构（自上而下）：台标徽标 → 频道名 → 彗尾转圈 → 状态 + 计时 → 流动条
-        self._load_frame = lf = tk.Frame(self.video_host, bg=LOAD_BG)
+        # ★ v2.10.35：等待层从「video_host 的 Tk 子窗」改成**独立置顶浮窗**。
+        #   根因：mpv / WebView2 的原生子窗口永远画在 Tk 控件之上 —— 等待层
+        #   做在 video_host 里，起播几次后就会被原生子窗整块盖住（实测官方页
+        #   的 WebView2 窗口正好盖满播放区，只剩最底下的流动条露在外面）＝
+        #   用户报的「切几次频道后只剩一条横线进度条」。
+        #   Toplevel 是顶层窗口，z 序在一切原生子窗之上；位置跟着 video_host
+        #   走（_place_load_top），显隐用 deiconify/withdraw。
+        self._load_top = lt = tk.Toplevel(self.root)
+        lt.withdraw()
+        lt.overrideredirect(True)
+        try:
+            lt.attributes("-topmost", True)
+        except Exception:
+            pass
+        lt.configure(bg=LOAD_BG)
+        self._load_frame = lf = tk.Frame(lt, bg=LOAD_BG)
         self._load_inner = inner = tk.Frame(lf, bg=LOAD_BG)
         inner.place(relx=0.5, rely=0.5, anchor="center")
 
@@ -1598,7 +1601,7 @@ class NativeApp:
         self.root.bind("<Down>", lambda e: self._safe_key(lambda: self._step_channel(1)))
         self.root.bind("<F11>", lambda e: self._safe_key(self._toggle_fullscreen))
         self.root.bind("<Escape>", lambda e: self._safe_key(self._exit_fullscreen))
-        self.root.bind("<Control-f>", lambda e: (self.search_entry.focus_set(), "break")[1])
+        # ★ v2.10.34：搜索频道功能已去掉（顶栏不再有搜索框），Ctrl-F 随之移除。
         self.root.bind("<Return>", lambda e: self._safe_key(self._toggle_epg))
 
     def _safe_key(self, fn):
@@ -1649,8 +1652,6 @@ class NativeApp:
             return
         self.src_mode = mode
         self.src_bar.set_active(mode)
-        self.search_var.set("")
-        self.search_kw = ""
         if mode == "wvt":
             # 从本机源切走：停掉 mpv / 藏起内嵌浏览器
             self._stop_mpv()
@@ -1677,7 +1678,7 @@ class NativeApp:
             self._load_cat("tv")
 
     def _show_filter(self, which):
-        """顶栏里「分类 / 分组」互斥占用同一格（v2.10.31）。
+        """左栏顶部「分类 / 分组」互斥占用同一格（v2.10.34 起在列表上方）。
 
         两个控件的 pack 参数必须由这里**统一**给出：以前在 _build_ui / _set_src /
         _render_cat_bar_off 三处各写一遍 `pack(fill="x", padx=12, pady=(10,8))`，
@@ -1858,8 +1859,6 @@ class NativeApp:
 
     def _load_group(self, g):
         self.cur_group = g
-        self.search_var.set("")
-        self.search_kw = ""
         self.channels = [c for c in self.wvt_channels if c["group"] == g]
         self._apply_filter()
         if self.src_mode == "wvt":
@@ -1898,23 +1897,17 @@ class NativeApp:
         self.channels = [dict(c, tid=tid) for c in chans]
         self._ui(self._apply_filter)
 
-    def _on_search(self, e=None):
-        self.search_kw = self.search_var.get().strip()
-        self._apply_filter()
-
     def _apply_filter(self):
-        kw = self.search_kw
-        self.filtered = [c for c in self.channels if (kw in c["name"])] if kw else list(self.channels)
+        """★ v2.10.34：搜索功能已去掉，这里只剩「按当前分类 / 分组原样渲染」。"""
+        self.filtered = list(self.channels)
         self._render_channels(self.filtered)
         if self.cur_cat == "fav":
             return
         if self.src_mode == "wvt":
-            self.status_lbl.configure(text="官网源 · %s · %d 个频道%s" % (
-                self.cur_group or "-", len(self.filtered),
-                ("（筛选自 %d）" % len(self.channels)) if kw else ""))
+            self.status_lbl.configure(text="官网源 · %s · %d 个频道（共 %d）" % (
+                self.cur_group or "-", len(self.filtered), len(self.wvt_channels)))
             return
-        self.status_lbl.configure(text="%d 个频道%s" % (
-            len(self.filtered), ("（筛选自 %d）" % len(self.channels)) if kw else ""))
+        self.status_lbl.configure(text="%d 个频道" % len(self.filtered))
 
     def _render_channels(self, chans):
         self._clear(self.chan_frame)
@@ -2453,13 +2446,21 @@ class NativeApp:
         ★ v2.10.32：改成「状态机 + 每帧重绘」——
           in（0.2s 淡入 + 内容上浮）→ hold（常显）→ out（0.16s 淡出后收起）。
         换频道时若正在淡出，直接切回 in，不会闪一下。
+        ★ v2.10.35：浮窗化 —— 先把 _load_top 对齐到播放区再 deiconify。
         """
         self._load_name.configure(text=name)
         self._set_loading_sub(sub)
         self._set_load_logo(name)
+        self._place_load_top()
         f = self._load_frame
         f.place(relx=0, rely=0, relwidth=1, relheight=1)
-        f.lift()
+        lt = self._load_top
+        lt.deiconify()
+        try:
+            lt.attributes("-topmost", True)   # 每次都补（全屏往返可能重置 z 序）
+        except Exception:
+            pass
+        lt.lift()
         now = time.time()
         self._load_t0 = now
         self._load_phase = "in"
@@ -2514,6 +2515,30 @@ class NativeApp:
             self._load_dot.configure(text=sub)
         except Exception:
             pass
+
+    def _place_load_top(self):
+        """把等待浮窗对齐到播放区的屏幕矩形（先 update 拿最新几何）。"""
+        try:
+            vh = self.video_host
+            vh.update_idletasks()
+            x, y = vh.winfo_rootx(), vh.winfo_rooty()
+            w, h = vh.winfo_width(), vh.winfo_height()
+            if w < 10 or h < 10:
+                return
+            self._load_top.geometry("%dx%d+%d+%d" % (w, h, x, y))
+        except Exception:
+            pass
+
+    def _queue_load_place(self):
+        """窗口移动/缩放中 → 去抖后重对齐等待浮窗（防 Configure 里 update 递归）。"""
+        if self._load_phase is None or self._load_move_job is not None:
+            return
+        self._load_move_job = self.root.after(40, self._load_place_tick)
+
+    def _load_place_tick(self):
+        self._load_move_job = None
+        if self._load_phase is not None:
+            self._place_load_top()
 
     def _hide_loading(self):
         """开始淡出（真正收起由 _load_tick 在动画走完后执行）。"""
@@ -2630,6 +2655,7 @@ class NativeApp:
                 if a <= 0.0:
                     self._load_phase = None
                     f.place_forget()
+                    self._load_top.withdraw()
                     return
             else:
                 a = 1.0
@@ -3071,33 +3097,24 @@ class NativeApp:
                 self.embed.notify_parent_moved()
             except Exception:
                 pass
-        # ★ v2.10.31：顶栏左侧多了「分类 / 分组」选择器（固定 248px），窗口拉窄
-        #   时右侧状态文案的空间不够，pack(side="right") 会把它裁掉半句，比整块
-        #   收起更难看。这里按宽度主动收放 —— 恢复时**必须用 before= 指回设置
-        #   按钮**，否则它会排到右侧队列末尾、跑到顶栏最左边（v2.4.2 踩过同类坑）。
-        # ★ v2.10.33 沉浸式：右上角又常驻了三个窗口按钮（约 134px），让位档位
-        #   整体右移；再加一档 —— 更窄时连搜索框一起收（最小窗宽 1000 也放得下）。
+        # 窗口拉窄时右侧状态文案的空间不够，pack(side="right") 会把它裁掉半句，
+        # 比整块收起更难看。这里按宽度主动收放 —— 恢复时**必须用 before= 指回
+        # 设置按钮**，否则它会排到右侧队列末尾、跑到顶栏最左边（v2.4.2 踩过）。
+        # ★ v2.10.34：分类 / 分组选择器已挪回左栏、搜索框已去掉，顶栏只剩
+        #   logo+标题(~200) + 源切换(178) + 右侧一组(设置 95 + 状态 262 +
+        #   窗口按钮 134)，实测放得下的下限约 1120，取 1150 留余量。
         try:
             w = self.root.winfo_width()
-            # 顶栏「全都要」的最小宽度实测 1401（左段 649 + 右侧一组 740 + 缝），
-            # 留点余量取 1405；再去掉状态文案那 262px 得 1150。
-            narrow = w < 1405
+            narrow = w < 1150
             if narrow and self.status_lbl.winfo_ismapped():
                 self.status_lbl.pack_forget()
             elif not narrow and not self.status_lbl.winfo_ismapped():
                 self.status_lbl.pack(side="right", padx=(8, 12),
                                      before=self.settings_btn)
-            tight = w < 1150
-            if tight and self.search_entry.winfo_ismapped():
-                self.search_entry.pack_forget()
-                self.search_icon.pack_forget()
-            elif not tight and not self.search_entry.winfo_ismapped():
-                # 恢复顺序 = 原始 pack 顺序（entry 先、🔍 后）——
-                # 右侧队列是「后 pack 的靠左」，这样 🔍 才回到搜索框左边。
-                self.search_entry.pack(side="right", padx=6, pady=14, ipady=5)
-                self.search_icon.pack(side="right")
         except Exception:
             pass
+        # ★ v2.10.35：等待浮窗是独立 Toplevel，窗口一动就得跟着挪
+        self._queue_load_place()
         self._sync_chrome()
         # ★ 沉浸式外框：Tk 的 -fullscreen 往返会销毁并重建顶层窗口（HWND 变、
         #   style 归零），所以每次 <Configure> 都 ensure() 一次 —— HWND 变了就
@@ -3179,6 +3196,7 @@ class NativeApp:
                 self.epg_bar.pack(fill="x", side="bottom")
         # 窗口尺寸变了，mpv / 浏览器都要重新铺一次
         self.root.after(120, self._fit_children)
+        self.root.after(200, self._load_place_tick)   # 等待浮窗跟着重对齐
         self.root.after(260, self._sync_chrome)
         self.root.after(300, self._ensure_chrome)
         try:
