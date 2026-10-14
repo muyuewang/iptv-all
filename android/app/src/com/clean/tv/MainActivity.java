@@ -55,239 +55,13 @@ public class MainActivity extends Activity {
     private WebView pageView;
     private String pageInjectJs;
 
-    /* ---------------- 触摸手势（Activity 级统一判定） ----------------
-       在 Activity 级 dispatchTouchEvent 里统一检测（官方页 pageView 盖在
-       主 WebView 上面时，网页层的手势根本收不到触摸 —— 所以必须在原生层）。
-       判定（v2.10.9 定稿 + v2.10.25 拆分）：
-         · **单击**（<450ms、位移<60px）→ 按 **起始位置** 分：
-           左半屏 = 频道列表 openChOv()；右半屏 = 设置 openSetOv()。
-           是否唤出由网页侧 __nativeTapOverlay 最终判定 —— 点在控制条 / 确认卡 /
-           线路面板 / 浮层等可点 UI 上时网页自己跳过，浮层不抢交互。
-         · **长按**（≥430ms 且未拖动）→ 控制条（线路/暂停/比例/全屏），见 gLpRun。
-           ★ v2.10.25 新增：此前单击被「浮层」和「控制条」两个动作同时抢，
-           一次点击两个 UI 全弹（用户截图实证）。控制条改由长按唤出后，单击
-           只剩浮层一个动作，冲突消失。
-       大幅竖向移动（亮度/音量手势）既不触发单击也不触发长按。触发浮层时官方页
-       pageView 只降 alpha 到 0.35（★ 不能 INVISIBLE —— 那会触发 Chromium 引擎级
-       暂停媒体，视频直接断；半透明则页面继续渲染、视频一直可见，浮层从底下透出来），
-       关浮层时恢复 1。控制条同理（见网页侧 syncDimmer）。 */
-    private float gDownX, gDownY;
-    private long gDownT;
-    private boolean gDragged;
-
-    /* ---------------- v2.10.36 「刚点过浮层」静默窗 ----------------
-       用户反馈三连现象：设置浮层弹出后「点空白第一次关不掉 → 点两次 → 频道列表
-       莫名弹出 → 点多了莫名换台」。
-
-       第二下的成因：原生看的是 elementFromPoint 的**当前**状态，而网页
-       closeAllOv() 是由 click 触发的（比原生 ACTION_UP 晚约 250ms）。第一下
-       把浮层关掉这件事，在第二下做判定时还没落地 —— 原生看过去是「视频空白」，
-       左半屏 → 直接 openChOv()，频道列表就这么冒出来了。
-
-       ★ 判据必须是「上一次点击**落在了浮层上**」，不是「上一次点过屏幕」：
-         · 落在浮层上（多半是在关它）→ 记时间戳，之后的 OV_QUIET_MS 内点空白
-           一律不唤浮层；
-         · 落在空白上（多半是在开它）→ 不记，否则「开浮层 → 立刻点空白关掉」
-           这种连贯操作会被自己的冷却挡住（实测两下只隔 250ms）。
-       700ms 与网页侧 OV_QUIET 同值，取实测：探针两下 tap 相隔 449ms，
-       而正常「关掉 → 看一眼 → 再开另一个」的手感间隔在 1s 以上。 */
-    private long gLastOvHitT = 0;
-    private static final long OV_QUIET_MS = 700;
-
-    /* ---------------- v2.10.36 「浮层刚关」的原生侧地面真值 ----------------
-       上面 gLastOvHitT 只在「走完 __nativeTapOverlay 判定」时才有机会记一笔，
-       可 fireOverlayIfFree 有一条**捷径**（官方页加载中直接 fireOverlay、不问网页），
-       当 pageView 一直没报 pagePlaying() 时（央视系 WASM/MSE 页面的注入脚本判不出
-       起播就是这种），这条捷径在**整个播放期间**都生效 —— 于是静默窗被整条绕过，
-       连点的第二下照样把频道列表叫出来（tools/_probe_ovtap_rep.py 实测 6/6 复现，
-       logcat 里一条 tapFire 都没有，就是走了捷径的铁证）。
-       所以「浮层刚关」这件事必须在原生侧也落地一份：网页 closeAllOv() 会同步调
-       notifyOvClosed()（JS→Java 直接调用，不等 runOnUiThread），这里记下时刻。
-       ★ 它现在只喂连击串（muteBurst），不再参与 inOvQuiet 的固定窗 —— 见那里。 */
-    private long gOvClosedT = 0;
-
-    /** 静默窗内（上一击刚落在浮层上）→ 这一下不唤浮层。
-     *  ★ 只看 gLastOvHitT（在 evaluateJavascript 回调里记，紧跟 ACTION_UP），
-     *    **不看** gOvClosedT：后者记在网页 closeAllOv() 里，要等 WebView 把
-     *    click 处理完，比 UP 晚约 250ms；WebView 一忙（模拟器高负载实测可到 1s+）
-     *    就会把静默窗拖长，把之后的正常点击也挡掉 —— 实测 1/5 概率「关掉浮层
-     *    1.5s 后再点也开不了」。gOvClosedT 现在专职喂连击串（见 muteBurst）。 */
-    private boolean inOvQuiet() {
-        long now = android.os.SystemClock.uptimeMillis();
-        return (now - gLastOvHitT < OV_QUIET_MS);
-    }
-
-    /* ★ 上面是「距上次事件多久」的固定窗，可探针实测：连点的间隔会被系统开销拉到
-       1.1s 以上（adb input tap 单次开销就有几百 ms），固定窗再怎么调都有漏网的。
-       所以再加一层**连击序列**跟踪：把间隔 < BURST_GAP 的连续点击视为「手指这一串」，
-       这一串里只要发生过「关掉浮层」或「点中浮层」，剩下的点击一律不再开新浮层 ——
-       手指没停就说明用户没打算开新的。停手超过 BURST_GAP 才开始新的一串。 */
-    private long gLastTapT = 0;
-    private int gBurstN = 0;
-    private boolean gBurstMuted = false;
-    private static final long BURST_GAP = 800;
-
-    /** 这一串连点里已经关过/点中过浮层 —— 后续连点不再开新浮层 */
-    private void muteBurst() { gBurstMuted = true; }
-
-    /* ---------------- v2.10.25 长按 = 控制条 ----------------
-       用户定稿：单击归浮层（左半屏=频道列表 / 右半屏=设置），**长按**归控制条
-       （线路/暂停/比例/全屏）。
-
-       为什么必须改：此前单击被两个动作同时抢。网页 onTap 的「切控制条」用
-       window.__nativeTapAt 防重入，可那个时间戳是在 fireOverlay() 里赋的，而
-       fireOverlay 要等 evaluateJavascript → __nativeTapOverlay() 的**异步回调**
-       才执行；网页 pointerup 早就跑完了 → 守卫生效不了 → 一次单击同时弹出
-       「频道列表 + 控制条」（用户截图实证）。
-
-       ★ 长按必须做在 Activity 级：官方页 pageView 盖在最上层时主 WebView 收不到
-       任何触摸，网页层的 touchstart 长按检测只在「本机源」才跑得起来。 */
-    private static final int LP_MS = 430;          /* 长按阈值：略小于单击上限 450 */
-    private boolean gLpFired = false;
-    private final Runnable gLpRun = new Runnable() {
-        @Override public void run() {
-            gLpFired = true;
-            try { root.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-            } catch (Throwable ignore) {}
-            /* 开/关控制条由网页侧定夺（浮层开着时网页自己忽略；官网源下网页
-               顺带把官方页降 alpha，否则控制条被 pageView 盖住看不见） */
-            jsApp("try{window.__tvToggleCtrl&&window.__tvToggleCtrl()}catch(e){}");
-        }
-    };
-    private void cancelLp() {
-        try { if (root != null) root.removeCallbacks(gLpRun); } catch (Throwable ignore) {}
-        try { if (web != null) web.removeCallbacks(gLpRun); } catch (Throwable ignore) {}
-    }
-
-    /** 单击已确认：唤出浮层（right=true 设置 / false 频道列表） */
-    private void fireOverlay(boolean right) {
-        ovOpenUI = true;
-        /* ★ v2.10.11：官方页未起播保持 alpha 0（黑底过渡中），别把原始网页拉到 0.35 */
-        try { if (!PAGE_UNDER_WEB && pageView != null && pagePlayingSeen) pageView.setAlpha(0.35f); } catch (Throwable ignore) {}
-        // __nativeTapAt 挡住同一次单击在网页 onTap 里的「切控制条」动作。
-        // ★ v2.10.36：__ovGuardUntil 不再在这里设 —— 移到网页侧 openChOv/openSetOv
-        //   内部（只在真正新开时设，320ms）。过去在原生侧无条件设 900ms，浮层开着
-        //   时重复点空白也会被刷新，实测开浮层后 250ms 内点空白必定被吞（用户
-        //   反馈的「第一次关不掉」）。
-        jsApp("window.__nativeTapAt=Date.now();"
-            + "try{" + (right ? "openSetOv&&openSetOv()" : "openChOv&&openChOv()") + "}catch(e){}");
-    }
-
-    /** 落点是否点在网页的可点 UI（控制条/确认卡/线路面板/节目单）上 —— 由注入 JS 判定，
-     *  命中则不唤浮层（浮层 alpha0.35 会盖住这些 UI 的点击）。坐标为原生物理像素，
-     *  JS 侧按 devicePixelRatio 换算。 */
-    private void fireOverlayIfFree(final boolean right, final float x, final float y) {
-        if (web == null) { fireOverlay(right); return; }
-        /* ★ v2.10.13：官方页**加载中**（未起播、主 web 只有状态页）直接唤出，不问 JS
-           —— 主 web 此时不存在控制条/浮层等可点 UI，而官方页加载中渲染器忙，
-           evaluateJavascript 往返可能被拖到数秒，用户点了几下全「没反应」
-           （CCTV-4 欧洲这类重页面实测复现）。起播后仍走 JS 判定避开可点 UI。
-           ★ v2.10.25 修两处：
-             ① 判据补 pageView==null —— 本机源没有官方页，pagePlayingSeen 永远是
-                false，过去被这条「未起播直接唤出」误伤：本机源下点控制条上任何
-                按钮都会顺带弹出频道列表浮层；
-             ② 补 !ovOpenUI —— 控制条亮着时也必须走 JS 落点判定，否则点在
-                「暂停」上照样弹浮层（控制条=ovOpenUI 见 syncDimmer）。 */
-        /* ★ v2.10.36：捷径也得过静默窗 —— 见 gOvClosedT 注释。加载中本来就没有
-           浮层，静默窗那时不会生效，不影响它「快点响应」的初衷。 */
-        if (pageView != null && !pagePlayingSeen && !ovOpenUI) {
-            if (inOvQuiet()) return;
-            fireOverlay(right);
-            return;
-        }
-        android.util.Log.i("CleanTV/LC", "tapFire right=" + right + " x=" + (int) x + " y=" + (int) y);
-        try {
-            web.evaluateJavascript(
-                "try{(window.__nativeTapOverlay?__nativeTapOverlay("
-                    + (int) x + "," + (int) y + "):1)?'1':'0'}catch(e){'1'}",
-                new android.webkit.ValueCallback<String>() {
-                    @Override public void onReceiveValue(String v) {
-                        long now = android.os.SystemClock.uptimeMillis();
-                        if (v != null && v.indexOf("0") >= 0) {
-                            /* 落在浮层 / 控制条等 UI 上（多半就是「点空白关掉浮层」
-                               那一下）→ 记一笔，开启静默窗并静音这一串连点。
-                               触摸照常走下面的分发，由网页 click 完成真正的关闭。 */
-                            gLastOvHitT = now;
-                            muteBurst();
-                            return;
-                        }
-                        /* 空白：静默窗内（浮层刚关 / 上一击刚落在浮层上）不唤 */
-                        if (inOvQuiet()) return;
-                        fireOverlay(right);
-                    }
-                });
-        } catch (Throwable t) { fireOverlay(right); }
-    }
-
-    /** 浮层 UI 是否开着（与 pageView alpha 同步维护）。
-     *  ★ v2.10.5：开着时 pageView 虽然半透明但仍在最上层接收触摸（v2.10.3 改 alpha
-     *  丢掉了 INVISIBLE 的「摘出触摸分发」副作用）——必须在 dispatchTouchEvent 里
-     *  把触摸直接转发给底层主 WebView（浮层所在处），否则浮层点不到也关不掉。 */
-    private boolean ovOpenUI = false;
-
-    @Override
-    public boolean dispatchTouchEvent(MotionEvent ev) {
-        switch (ev.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN:
-                gDownX = ev.getX(); gDownY = ev.getY();
-                gDownT = ev.getEventTime();
-                gDragged = false;
-                gLpFired = false;
-                cancelLp();
-                /* v2.10.25：布防长按（唤控制条）。浮层开着也照布 —— 网页侧
-                   __tvToggleCtrl 自己会忽略，长按仍按「消费掉」处理。 */
-                try { if (root != null) root.postDelayed(gLpRun, LP_MS); } catch (Throwable ignore) {}
-                break;
-            case MotionEvent.ACTION_MOVE:
-                /* 大幅移动（亮度/音量手势、滑动）不算单击、也不算长按 */
-                if (Math.abs(ev.getY() - gDownY) > 60 || Math.abs(ev.getX() - gDownX) > 60) {
-                    if (!gDragged) { gDragged = true; cancelLp(); }
-                }
-                break;
-            case MotionEvent.ACTION_UP:
-                cancelLp();
-                /* v2.10.25：长按已消费这次手势（控制条切完了）→ 不再当单击开浮层。
-                   ★ 这里不再看 ovOpenUI —— 「浮层/控制条占着」的判定交给网页的
-                   __nativeTapOverlay 落点命中测试（点空白关浮层、点频道项换台都由
-                   网页那次 click 处理；命中 #ctrl/.ov 就不会再开一个新浮层）。 */
-                if (gLpFired) {
-                    /* 长按：什么都不做 */
-                } else if (!gDragged && ev.getEventTime() - gDownT < 450) {
-                    /* ★ v2.10.36 连击序列：见 gBurstMuted 注释。先归串，再决定。 */
-                    long now = ev.getEventTime();
-                    if (now - gLastTapT >= BURST_GAP) {
-                        gBurstN = 1;
-                        gBurstMuted = false;      /* 停手了 —— 新的一串 */
-                    } else {
-                        gBurstN++;
-                    }
-                    gLastTapT = now;
-                    if (!gBurstMuted) {
-                        fireOverlayIfFree(
-                            gDownX * 2 > Math.max(1, root.getWidth()), gDownX, gDownY);
-                    }
-                }
-                break;
-            case MotionEvent.ACTION_CANCEL:
-                cancelLp();
-                break;
-        }
-        /* ★ 浮层开着：触摸绕过半透明的 pageView，直接送主 WebView（长按手势检测在上面已做完，
-           状态一致，整段事件流都走同一条路）。 */
-        if (!PAGE_UNDER_WEB && ovOpenUI && web != null) {
-            try { web.dispatchTouchEvent(ev); } catch (Throwable ignore) {}
-            return true;
-        }
-        /* ★ v2.10.13：官方页加载中（未起播）pageView 虽 alpha0 但仍在最上层收触摸 ——
-           用户点下的位置被隐形官方页吃掉，等起播淡入后这些点击恰好落在页面控件上
-           就「凭空生效」（用户实测：加载中点不动，加载完乱跳）。直接吞掉 ——
-           唤浮层已在上面 UP 分支处理完（ovOpenUI=true 走不到这里）。
-           ★ 不能用 INVISIBLE：会触发 Chromium 引擎级暂停，页面起播判定可能死锁。 */
-        if (!PAGE_UNDER_WEB && !pagePlayingSeen && pageView != null) {
-            return true;
-        }
-        return super.dispatchTouchEvent(ev);
-    }
+    /* ---------------- v2.10.38 触摸架构收归网页层 ----------------
+       PAGE_UNDER_WEB（v2.10.37 试验通过，现已转正）后主 WebView 永在最上层，
+       触摸必然到达网页 —— 单击唤浮层的落点判定改由网页 click target **同步**
+       完成（player.html bindTapToOpen），不再需要原生 dispatchTouchEvent 的
+       UP 分支、fireOverlayIfFree 的 evaluateJavascript 往返、静默窗/连击串/
+       长按控制条这一整套异步补丁（v2.10.36 全包因此退役）。
+       原生只保留：MENU 键 = 设置浮层、BACK 链、TV 遥控键。 */
 
     /** 传给注入脚本的适配规则与频道附加参数 */
     private String pageAdapterJson = "{}";
@@ -298,25 +72,11 @@ public class MainActivity extends Activity {
      * 免得把新页面拆了。
      */
     /**
-     * ★ v2.10.37 试验开关：true = 官方页 pageView 挂在主 WebView **之下**（路线 A 简化试验）。
-     *
-     * 现状（false）的代价：官方页在最上层，我们的 UI（控制条 / 浮层 / 确认卡）全在
-     * 下面的主 WebView 上 → 为了「让 UI 透出来 + 把触摸绕回去」长出了一整套补丁：
-     * syncDimmer / setPageOverlay / notifyOvClosed 三个桥，ovOpenUI、gLastOvHitT、
-     * gOvClosedT、gLastTapT、gBurstN、gBurstMuted 六个原生字段，__ovClosedAt、
-     * __ovGuardUntil、__nativeTapAt、__nativeTapOverlay 四个网页补丁。
-     *
-     * 改成 true 之后：主 WebView 播放时本来就是透明的（frame-on），官方页画面照样
-     * 透出来；UI 天然在上面，触摸天然走主 WebView，落点判定退化成一句
-     * document.elementFromPoint —— 上面那 13 项全部可以删掉。
-     *
-     * ⚠ 唯一待验证风险：Android 的遮挡检测不知道「盖在上面的窗口是透明的」，
-     *   官方页可能被判定为不可见 → 触发 Chromium 引擎级暂停媒体
-     *   （就是我们踩过的 setVisibility(INVISIBLE) 那条坑的自动版）。
-     *   验证方法：官网源网页线路起播后，观察 30s 内是否持续出帧（截图对比）。
-     *   验证通过后：删除本开关，按 true 分支清理上述补丁；验证失败则整段回退。
+     * ★ v2.10.38 转正：官方页 pageView 挂在主 WebView **之下**（v2.10.37 路线 A 试验
+     *   验证通过：遮挡暂停不存在、浮层天然可见）。主 WebView 播放时本来就透明
+     *   （frame-on），UI 天然在上面、触摸天然走主 WebView —— 曾为旧层序长出的
+     *   13 项协同补丁（3 桥 + 6 原生字段 + 4 网页钩子）已全部删除。
      */
-    private static final boolean PAGE_UNDER_WEB = true;
 
     private int pageSeq = 0;
     /** 本页是否已经报过「起不来」；成功起播或换页时复位，避免反复触发切线路 */
@@ -601,56 +361,6 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean hasWebPage() { return true; }
 
-        /** v2.10.36：网页 closeAllOv() 关掉浮层时**同步**通知原生（见 gOvClosedT）。
-         *  ★ 为什么不复用 setPageOverlay(false)：后者在「控制条 6 秒自动隐藏」时也会
-         *    被 syncDimmer 调到，语义是「没有 UI 需要透出」而不是「浮层关了」——
-         *    拿它当时戳会让控制条消失后 700ms 内的点击也被静默窗吃掉。 */
-        @JavascriptInterface
-        public void notifyOvClosed() {
-            gOvClosedT = android.os.SystemClock.uptimeMillis();
-            muteBurst();      /* 这一串连点里已经关过浮层了 → 剩下的连点不再开新的 */
-        }
-
-        /** v2.10：半透明浮层开/关 —— 开时把官方页降到 0.35 alpha（媒体继续渲染），关时恢复。
-         *  ★ v2.10.11：官方页**起播前**（pagePlayingSeen=false，还在黑底过渡 alpha 0）
-         *  不得见光 —— 实测加载中点击唤出浮层，alpha 被拉到 0.35/恢复 1，原始网页和
-         *  原始播放器就透出来了。未起播时开/关都维持 0，起播后 fadeInPage 自然接管。 */
-        @JavascriptInterface
-        public void setPageOverlay(final boolean on) {
-            /* ★ v2.10.36：ovOpenUI **必须同步先设**，不能等 runOnUiThread 排到。
-               网页 closeAllOv() → syncDimmer() → 这里，是 JS→Java 的直接调用；
-               若把赋值放进 Runnable，从「.ov 变 display:none」到「ovOpenUI 翻假」
-               之间就存在一个消息队列往返的窗口。这个窗口里 UP 会拿陈旧标记做
-               决定：官网源下走 !pagePlayingSeen 捷径直接 fireOverlay，或把触摸
-               转发给已关的浮层 —— 正是「点一下关不掉、点两下弹出频道列表」的
-               另一半成因（另一半是网页侧缺少 __ovClosedAt 闸门）。 */
-            ovOpenUI = on;
-            runOnUiThread(new Runnable() {
-                @Override public void run() {
-                    ovOpenUI = on;   /* 再设一次：UI 线程上保证与 alpha 同步落地 */
-                    try {
-                        if (pageView != null) {
-                            if (PAGE_UNDER_WEB) {
-                                /* 官方页在主 WebView 之下：UI 天然盖在它上面，
-                                   不需要「降 alpha 让 UI 透出来」，画面也不该被调暗。 */
-                            } else if (!pagePlayingSeen) { pageView.setAlpha(0f); }
-                            else {
-                                /* ★ v2.10.3：降 alpha 不 INVISIBLE —— INVISIBLE 会触发
-                                   Chromium 引擎级暂停媒体（onVisibilityChanged），
-                                   视频直接断；半透明则官方页继续渲染，浮层透出来 */
-                                pageView.setAlpha(on ? 0.35f : 1f);
-                            }
-                            android.util.Log.i("CleanTV/LC", "setPageOverlay " + on
-                                + " playing=" + pagePlayingSeen
-                                + " alpha=" + pageView.getAlpha()
-                                + " vis=" + pageView.getVisibility()
-                                + " zTop=" + (root.getChildAt(root.getChildCount()-1) == pageView));
-                        }
-                    } catch (Throwable ignore) {}
-                }
-            });
-        }
-
         /** v2.10：TV「确认退出」卡的退出按钮（finish 会走 onDestroy 释放播放器） */
         @JavascriptInterface
         public void exitApp() {
@@ -667,7 +377,6 @@ public class MainActivity extends Activity {
                     pagePlayingSeen = true;     // 已起播：看门狗收兵
                     pageFailedSent = false;      // 已起播：允许下次超时再触发
                     applyOrientation(true);
-                    /* ★ v2.10.13：见 fadeInPage 内的 ovOpenUI 守卫（浮层开着不能拉亮） */
                     fadeInPage();
                     try {
                         web.evaluateJavascript(
@@ -1127,22 +836,13 @@ public class MainActivity extends Activity {
         } catch (Throwable ignore) { pageUaNow = UA_PC; }
         try { v.stopLoading(); } catch (Throwable t) {}
         if (v.getParent() == null) {
-            if (PAGE_UNDER_WEB && web != null) {
-                /* 插到主 WebView 之前 = 主 WebView 之下（root 是 FrameLayout，
-                   插入顺序即 z 序）。此时主 WebView 透明（frame-on），画面照常透出。 */
-                int at = root.indexOfChild(web);
-                root.addView(v, at >= 0 ? at : 0, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            } else {
-                root.addView(v, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            }
+            /* 插到主 WebView 之前 = 主 WebView 之下（root 是 FrameLayout，
+               插入顺序即 z 序）。此时主 WebView 透明（frame-on），画面照常透出。 */
+            int at = root.indexOfChild(web);
+            root.addView(v, (web != null && at >= 0) ? at : 0, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
-        if (PAGE_UNDER_WEB) {
-            try { if (web != null) web.bringToFront(); } catch (Throwable ignore) {}
-        } else {
-            v.bringToFront();
-        }
+        try { if (web != null) web.bringToFront(); } catch (Throwable ignore) {}
         v.loadUrl(url);
         /* ★ v2.10.8 过渡：官方页先压在黑底下面（alpha 0）。页面从加载→白底渲染→
            自家转圈→未起播海报（大播放键 + 「× 返回」）这一整段丑态全部不见天日，
@@ -1169,7 +869,6 @@ public class MainActivity extends Activity {
      *  浮层关闭走 setPageOverlay(false) 恢复 1。 */
     private void fadeInPage() {
         if (pageView == null) return;
-        if (!PAGE_UNDER_WEB && ovOpenUI) return;
         try {
             if (pageView.getAlpha() >= 1f) return;
             pageView.animate().alpha(1f).setDuration(450).start();
@@ -1579,7 +1278,8 @@ public class MainActivity extends Activity {
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         // v2.10 TV 遥控器：菜单键 = 设置浮层（OK 键=频道列表由网页 keydown 处理）
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            fireOverlay(true);   /* TV 菜单键 = 设置浮层 */
+            /* TV 菜单键 = 设置浮层（v2.10.38：直接注入，落点判定在网页层） */
+            jsApp("try{openSetOv&&openSetOv()}catch(e){}");
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_BACK) {

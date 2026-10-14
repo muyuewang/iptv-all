@@ -107,39 +107,19 @@
   #player.fs #vwrap{position:absolute;left:0;top:0;right:0;bottom:0;width:100%;height:100%;aspect-ratio:auto;flex:none;}
   #player.fs #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;z-index:2;border-top:none;
     background:transparent;pointer-events:none;}
-  #player.fs #ctrl.hide .ctlbar{opacity:0;pointer-events:none;}
+  /* fs/tv 模式 #ctrl 整体 pointer-events:none —— 面板类子元素要单独放开 */
+  #player.fs #linePanel, #player.fs #epg, body.tv #linePanel, body.tv #epg{pointer-events:auto;}
   #player.fs #epg{max-height:44vh;}
 
-  /* 控制条容器：上下两条半透明渐变栏，中间区域透明可穿透（点画面用） */
-  #ctrl{display:block;transition:opacity .3s var(--ease);}
-  .ctlbar{pointer-events:auto;transition:opacity .28s var(--ease),transform .28s var(--ease);}
+  /* 控制条容器：v2.10.38 底部控制条已删，只剩顶栏（频道名+收藏）与两块面板 */
+  #ctrl{display:block;}
+  .ctlbar{pointer-events:auto;}
   /* 顶部栏：返回 + 频道名 + 收藏 */
   #topbar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;
     padding:14px 16px 30px;z-index:3;
     background:linear-gradient(180deg,rgba(8,9,13,.9) 0%,rgba(8,9,13,.5) 60%,transparent 100%);}
   #topbar .cname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;
     font-size:15px;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.8);}
-  /* 底部栏：进度提示 + 节目单/线路/播放/比例/全屏/返回 */
-  #botbar{position:absolute;bottom:0;left:0;right:0;z-index:3;
-    background:linear-gradient(0deg,rgba(8,9,13,.92) 0%,rgba(8,9,13,.55) 60%,transparent 100%);
-    padding:30px 16px 16px;}
-  #botbar .row1{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
-  #botbar .live-tag{flex:0 0 auto;font-size:10px;font-weight:700;color:#fff;background:var(--brand-grad);
-    border-radius:4px;padding:2px 7px;letter-spacing:.03em;}
-  #botbar .prog{flex:1;color:var(--fg-dim);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;
-    white-space:nowrap;}
-  #botbar .clock{flex:0 0 auto;color:var(--fg-mute);font-size:12px;font-variant-numeric:tabular-nums;}
-  /* 播放信息角标（v2.8）：分辨率 / 帧率 / 码率 / 缓冲。默认「简」，点击循环 关→简→详。
-     关闭态留一个很淡的 ⓘ 作为入口，否则关掉之后就再也点不开了。 */
-  #botbar .statbadge{flex:0 0 auto;color:var(--fg-mute);font-size:11.5px;font-weight:600;
-    font-variant-numeric:tabular-nums;letter-spacing:.01em;white-space:nowrap;
-    padding:2px 8px;border-radius:999px;border:1px solid var(--line);cursor:pointer;
-    transition:background .18s var(--ease),color .18s var(--ease),opacity .18s var(--ease);}
-  #botbar .statbadge.off{opacity:.4;padding:2px 6px;border-color:transparent;}
-  #botbar .statbadge.warn{color:var(--gold);border-color:rgba(255,197,49,.32);}
-  #botbar .statbadge:active{background:rgba(255,255,255,.1);}
-  body.tv #botbar .statbadge{font-size:15px;padding:4px 12px;}
-  #botbar .row2{display:flex;align-items:center;gap:8px;}
   .ctlbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 4px;
     border-radius:var(--r-sm);color:var(--fg);background:transparent;border:none;cursor:pointer;
     font-size:11px;transition:background .18s var(--ease),transform .18s var(--ease);}
@@ -226,15 +206,11 @@
   body.tv #status .sub{font-size:19px;}
   body.tv #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;border-top:none;
     background:transparent;pointer-events:none;}
-  body.tv #ctrl.hide .ctlbar{opacity:0;pointer-events:none;}
   body.tv .ctlbar{pointer-events:auto;}
   body.tv #topbar{padding:20px 40px 40px;}
   body.tv #topbar .cname{font-size:24px;}
   body.tv .ctlbtn{font-size:15px;padding:12px 8px;}
   body.tv .ctlbtn .ic{font-size:28px;}
-  body.tv #botbar{padding:40px 40px 24px;}
-  body.tv #botbar .prog{font-size:17px;}
-  body.tv #botbar .clock{font-size:16px;}
   body.tv #linePanel .grid{grid-template-columns:repeat(6,1fr);gap:14px;}
   body.tv #linePanel .line-item .ic{font-size:28px;}
   body.tv #linePanel .line-item .lb{font-size:15px;}
@@ -476,24 +452,8 @@
       <div class="cname" id="cname">—</div>
       <button class="ctlbtn" id="btnFav" tabindex="0"><span class="ic">☆</span><span class="lb">收藏</span></button>
     </div>
-    <!-- 底部栏：直播标记 + 节目 + 时钟 + 功能钮 -->
-    <div id="botbar" class="ctlbar">
-      <div class="row1">
-        <span class="live-tag">直播</span>
-        <span class="prog" id="progNow">—</span>
-        <span class="clock" id="clockNow"></span>
-        <!-- 播放信息角标（v2.8）：分辨率/帧率/码率/缓冲。点击循环 关 → 简 → 详 -->
-        <span class="statbadge off" id="statBadge" tabindex="0" title="播放信息（点击切换）"></span>
-      </div>
-      <div class="row2">
-        <button class="ctlbtn" id="btnEpg" tabindex="0"><span class="ic">📺</span><span class="lb">节目单</span></button>
-        <button class="ctlbtn" id="btnLines" tabindex="0"><span class="ic">🔄</span><span class="lb">线路</span></button>
-        <button class="ctlbtn" id="btnTune" tabindex="0"><span class="ic">⚡</span><span class="lb">秒开</span></button>
-        <button class="ctlbtn" id="btnPlay" tabindex="0"><span class="ic">⏸</span><span class="lb">暂停</span></button>
-        <button class="ctlbtn" id="btnRatio" tabindex="0"><span class="ic">🖥</span><span class="lb">比例</span></button>
-        <button class="ctlbtn" id="btnFs" tabindex="0"><span class="ic">⛶</span><span class="lb">全屏</span></button>
-      </div>
-    </div>
+    <!-- v2.10.38：底部控制条（节目单/线路/秒开/暂停/比例/全屏）整体删除，
+         功能入口全部迁入设置浮层（renderSetPanel「播放控制」区）。 -->
     <!-- 线路选择弹层 -->
     <div id="linePanel">
       <div class="ttl">选择线路</div>
@@ -539,7 +499,7 @@ var C = window.TVCore;
 var CATS = C.CATS;
 var IS_TV = /[?&]tv=1/.test(location.search) || window.innerWidth >= 960 || window.innerHeight >= 960;
 var cur = { tid:null, id:null, name:null, urls:[], idx:0, epg:[], extra:[] };
-var player = null, ctrlTimer = null;
+var player = null;
 /* ★ 会话关闭闸门（必须全局！）：openChannel/playSoft/playWebLine/nextLine/closePlayer
    是全局函数，__appPause/__appResume 在 init 里定义 —— 若把闸门 var 声明在 init
    内部，__appPause 写的是闭包变量、闸门读的是全局变量，两个变量互不相通，
@@ -677,7 +637,6 @@ function showErrCard(o){
     }, 1000);
   } else { rt.style.display = "none"; rt.textContent = ""; }
   $("errCard").classList.add("show");
-  resetCtrlTimer();
 }
 function hideErrCard(){
   clearInterval(__errCountdown); __errCountdown = null;
@@ -716,12 +675,9 @@ function setSrc(m){
   toast(m==="wvt"?"已切换到官网源":"已切换到本机源");
 }
 
-/* 播放/暂停按钮 UI 同步 */
+/* 播放/暂停按钮 UI 同步（v2.10.38：控制条已删，入口在设置浮层） */
 function setPlayBtnUI(){
-  var b=$("btnPlay");
-  var paused = NATIVE.active ? isNativePaused : ($("v") && $("v").paused);
-  b.querySelector(".ic").textContent = paused ? "▶" : "⏸";
-  b.querySelector(".lb").textContent = paused ? "播放" : "暂停";
+  try{ if(ovOpen("set")) renderSetPanel(); }catch(e){}
 }
 
 /* ---------- 收藏 ---------- */
@@ -761,7 +717,6 @@ function showPlayerLayer(){
   p.classList.remove("closing");
   p.classList.add("show");
   setFrameOn();
-  startStatWatch();     /* 底栏播放信息角标（v2.8）随之开始刷新 */
 }
 
 /* ---------- 播放 ---------- */
@@ -791,9 +746,8 @@ function openChannel(tid, id, name){
      有没有帧：没有帧时露出的就是原来的黑，和旧行为一致。 */
   $("cname").textContent=name;
   setFavBtnUI();
-  $("btnEpg").className="ctlbtn"; $("epg").classList.remove("show");
+  $("epg").classList.remove("show");
   closeLinePanel();
-  hideCtrlLater();                 /* 起播先亮控制条 6s（内部含 syncDimmer） */
   showPlayerLayer();
   /* ★ 手机端：进入播放自动转横屏全屏，避免竖屏下视频只占上面一小条。
      竖屏手机屏宽有限，横屏才能让 16:9 视频真正铺满可视面积。
@@ -817,7 +771,7 @@ function openChannel(tid, id, name){
     if(!ch){ setStatus("频道信息缺失"); return; }
     cur.urls=ch.urls.map(function(u){return u.url;});
     cur.extra=ch.urls.map(function(u){return u.extra||"";});
-    renderLines(); updateProgNow(); setLineUI();
+    renderLines(); setLineUI();
     /* ★ v2.10.23 官方源选线（对齐桌面端 v2.10.22「直连优先」）：
        本机源有 GOOD_LINE / LINE_CACHE 兜着，官方源过去却是**写死 playIdx(0)**。
        而官网源实测有 20+ 个频道是「第 1 条官方直播页 + 第 2 条直链」的形状
@@ -917,7 +871,7 @@ function openChannel(tid, id, name){
 function startLocal(urls, epg, key){
   if(__sessionClosed) return;
   cur.epg = epg || [];
-  cur.urls = urls; renderLines(); updateProgNow();
+  cur.urls = urls; renderLines();
   if(IS_TV){ var f=document.querySelector("#lineGrid .line-item"); if(f) f.focus(); }
   /* ① 实证线路优先（★ v2.10.20 实测教训）：探活「成功」≠ 能出帧 —— 线路1
         首字节最快、测速把它选为最优，但它永远不出画（实测 CCTV1/CCTV5+ 都是
@@ -1075,19 +1029,6 @@ function setFavBtnUI(){
   b.querySelector(".lb").textContent=on?"已收藏":"收藏";
 }
 
-/* 底部栏：当前节目名 + 时钟 */
-function updateProgNow(){
-  var p=$("progNow");
-  if(cur.epg && cur.epg.length){
-    var now=new Date(), hm=("0"+now.getHours()).slice(-2)+":"+("0"+now.getMinutes()).slice(-2), curP="";
-    for(var i=0;i<cur.epg.length;i++){ if(cur.epg[i].time<=hm) curP=cur.epg[i].name; }
-    p.textContent=curP||"";
-  } else { p.textContent=""; }
-}
-function updateClock(){
-  var d=new Date(); $("clockNow").textContent=("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
-}
-
 /* ---------- 线路智能测速选优 ----------
    探测每条线路的「首字节延迟」与「视频分辨率/码率」。
    低端设备解不动 1080p@2.4Mbps —— 优先选码率低的线路，避免解码跟不上导致卡顿。
@@ -1176,7 +1117,7 @@ function setLineUI(){
     var ic=ls[i].querySelector(".ic"); if(ic) ic.textContent=(i===cur.idx?"✅":"📡");
   }
 }
-function openLinePanel(){ $("linePanel").classList.add("show"); resetCtrlTimer(); }
+function openLinePanel(){ $("linePanel").classList.add("show"); }
 function closeLinePanel(){ $("linePanel").classList.remove("show"); }
 /* ==================== 原生硬解通道（v1.4 新增） ====================
    为什么加：mpegts.js 是 JS 软解，1080p@2.4Mbps 在 4 核低端机上解不过来（实测 20 秒只推进 4.6 秒）。
@@ -1403,82 +1344,7 @@ function bindNativeWatch(){
      ⚠ 官网网页线路看不到这个角标 —— 那条路是 WebView 直接导航到官方页面
        （NativeTV.openPage），我们自己的播放层 UI 已经不在页面上。
    颜色：正常灰白；缓冲 <1s 或播放器不在播放状态 → 金色提醒（只是让人一眼看出快撑不住）。 */
-var STATS_MODE = 1;   /* 0 关 / 1 简 / 2 详 */
-try{ var _sm = parseInt(localStorage.getItem("tv_stats"), 10); if(_sm >= 0 && _sm <= 2) STATS_MODE = _sm; }catch(e){}
-var __statT = null;
 
-function cycleStatsMode(){
-  STATS_MODE = (STATS_MODE + 1) % 3;
-  try{ localStorage.setItem("tv_stats", String(STATS_MODE)); }catch(e){}
-  toast(STATS_MODE === 0 ? "已关闭播放信息角标"
-      : STATS_MODE === 1 ? "播放信息：简（分辨率 · 帧率）"
-                         : "播放信息：详细（分辨率 · 帧率 · 带宽 · 缓冲）", {type:"ok"});
-  updateStatBadge();
-}
-function fmtRes(w, h){
-  var short = Math.min(w, h);
-  if(w >= 3800 || short >= 2100) return "4K";
-  if(w >= 1900 || short >= 1000) return "1080P";
-  if(w >= 1200 || short >= 700)  return "720P";
-  if(w >= 800)                   return "480P";
-  return w + "×" + h;
-}
-function fmtBw(bps){
-  if(bps >= 1000000) return (bps / 1000000).toFixed(1) + "M";
-  return Math.round(bps / 1000) + "k";
-}
-function updateStatBadge(){
-  var b = $("statBadge"); if(!b) return;
-  if(STATS_MODE === 0){ b.className = "statbadge off"; b.textContent = "ⓘ"; return; }
-  var w = 0, h = 0, fps = 0, bw = 0, buf = -1, playing = false, hw = -1;
-  if(NATIVE.active && NATIVE.lastStats){
-    var s = NATIVE.lastStats;
-    w = s.w || 0; h = s.h || 0; bw = s.bw || 0;
-    /* ★ fps 要过滤 Format.NO_VALUE(-1)：国内 IPTV 的 HLS 多数不在
-       #EXT-X-STREAM-INF 里声明 FRAME-RATE，media3 就报 -1.0 —— 直接格式化
-       会显示成「-1fps」（实测踩到）。同理码率 br 也常是 -1，所以不作展示。 */
-    fps = Math.round(s.fps || 0); if(!(fps > 0)) fps = 0;
-    if(typeof s.hw === "number") hw = s.hw;
-    if(typeof s.bufferedMs === "number" && s.bufferedMs >= 0) buf = s.bufferedMs;
-    playing = !!s.playing;
-  } else {
-    var v = $("v");
-    if(v && v.videoWidth){
-      w = v.videoWidth; h = v.videoHeight;
-      try{
-        var bf = v.buffered;
-        if(bf && bf.length) buf = Math.max(0, Math.round((bf.end(bf.length - 1) - v.currentTime) * 1000));
-      }catch(e){}
-      playing = !v.paused;
-    }
-  }
-  /* 还没拿到视频尺寸（刚起播 / 只有音频）：给个「…」占位，别显示半截信息 */
-  if(!w || !h){ b.className = "statbadge"; b.textContent = "…"; return; }
-  /* fps 拿不到时（很常见）改显示「硬解 / 软解」—— 对用户比一个空缺更有用：
-     软解意味着这条线路在烧 CPU，卡顿/发热时能一眼看出根因。 */
-  var tail = fps ? (fps + "fps") : (hw === 1 ? "硬解" : (hw === 0 ? "软解" : ""));
-  var seg = [];
-  if(STATS_MODE === 2){
-    seg.push(w + "×" + h);
-    if(tail) seg.push(tail);
-    if(bw > 0) seg.push("↓" + fmtBw(bw));
-    if(buf >= 0) seg.push("缓冲" + (buf / 1000).toFixed(1) + "s");
-  } else {
-    seg.push(fmtRes(w, h));
-    if(tail) seg.push(tail);
-  }
-  b.textContent = seg.join(" · ");
-  b.className = "statbadge" + (((buf >= 0 && buf < 1000) || !playing) ? " warn" : "");
-}
-function startStatWatch(){
-  stopStatWatch();
-  updateStatBadge();
-  __statT = setInterval(updateStatBadge, 2000);
-}
-function stopStatWatch(){
-  if(__statT){ clearInterval(__statT); __statT = null; }
-  var b = $("statBadge"); if(b) b.className = "statbadge off";
-}
 
 /* 开始原生播放；返回 false 表示原生通道不可用（调用方回落软解） */
 function playNative(url, headers){
@@ -1553,7 +1419,6 @@ function nativeFreeze(){
   clearInterval(NATIVE.timer);
   clearTimeout(__freezeT);
   clearStartWatch();               /* 已退出播放层：起播看门狗必须撤，否则它会在列表上换线 */
-  stopStatWatch();                 /* 角标同理：退出播放层就停刷新（v2.8） */
   /* 先撤透明类：把 WebView 变回不透明，列表才看得到（保帧画面就藏到后面去了） */
   try{ document.documentElement.classList.remove("native-on"); document.body.classList.remove("native-on"); }catch(e){}
   clearFrameOn();
@@ -1597,10 +1462,8 @@ function applyTuneToNative(){
   try{ if(window.NativeTV && NativeTV.setTuneProfile) NativeTV.setTuneProfile(TUNE); }catch(e){}
 }
 function syncTuneUI(){
-  var b=$("btnTune"); if(!b) return;
-  var fast = (TUNE !== "stable");
-  b.querySelector(".ic").textContent = fast ? "⚡" : "🛡";
-  b.querySelector(".lb").textContent = fast ? "秒开" : "稳定";
+  /* v2.10.38：秒开按钮已并入设置浮层「播放控制」区，开浮层时随 renderSetPanel 刷新 */
+  try{ if(ovOpen("set")) renderSetPanel(); }catch(e){}
 }
 function setTune(m){
   TUNE = (m === "stable") ? "stable" : "fast";
@@ -2234,7 +2097,6 @@ function closePlayer(){
   clearStartWatch();            /* ★ 起播看门狗：退出播放层就不该再计时换线 */
   clearSniffCut();              /* ★ 提取优选切换的延时器（v2.9） */
   extcAbort();                  /* ★ v2.10.15：直连缓存尝试随会话一起终止 */
-  stopStatWatch();              /* ★ 播放信息角标：退出播放层停止刷新（v2.8） */
   __autoHopN = 0;               /* 自动跳台计数复位（下次开台重新开始数） */
   if(player){ try{player.destroy();}catch(e){} player=null; }
   /* ★ 保帧版释放：不摘画面层，最后一帧留在 TextureView 上给下次开台用 */
@@ -2312,120 +2174,51 @@ function setFsMode(on){
     try{ if(window.NativeTV && NativeTV.setLandscape) NativeTV.setLandscape(false); }catch(e){}
     setTimeout(function(){ try{ window.dispatchEvent(new Event("resize")); }catch(e){} }, 260);
   }
-  hideCtrlLater();
 }
-function resetCtrlTimer(){
-  clearTimeout(ctrlTimer);
-  ctrlTimer=setTimeout(function(){
-    var p=$("player");
-    if(p.classList.contains("show") && !$("epg").classList.contains("show") && !$("linePanel").classList.contains("show")){
-      $("ctrl").classList.add("hide");
-      if($("ctrl").contains(document.activeElement)){ try{ $("v").focus(); }catch(e){} }
-      syncDimmer();               /* v2.10.25：控制条收起了，官方页恢复不透明 */
-    }
-  }, 6000);
-}
-/* ---------- v2.10.25 主 WebView UI 的「透出」开关 ----------
-   控制条 / 浮层都画在主 WebView 上，而官网源的官方页 pageView 盖在最上层。
-   要让它们看得见，得把官方页降到 0.35 alpha（★ 不能 INVISIBLE —— 那会触发
-   Chromium 引擎级暂停媒体，视频直接断）；同时原生侧会把触摸转发给主 WebView，
-   否则 alpha 后的 pageView 照样吃掉触摸，按钮点不动（见 MainActivity 的 ovOpenUI）。
-   过去这套只在浮层开合时做，控制条漏在外面 —— 官网源长按唤出的控制条压根看不见。 */
-function syncDimmer(){
-  var need = anyOvOpen() || !$("ctrl").classList.contains("hide")
-             || !!($("errCard") && $("errCard").classList.contains("show"));
-  try{ if(window.NativeTV && NativeTV.setPageOverlay) NativeTV.setPageOverlay(!!need); }catch(e){}
-}
-/* 长按（原生长按手势）唤出控制条，6 秒无操作自动隐藏 */
-function hideCtrlLater(){
-  $("ctrl").classList.remove("hide");
-  resetCtrlTimer();
-  syncDimmer();
-}
-/* ---------- v2.10.25 长按 = 控制条（由 MainActivity 的长按手势调用） ----------
-   用户定稿：单击归浮层（左半屏=频道列表 / 右半屏=设置），**长按**归控制条
-   （线路/暂停/比例/全屏）。此前单击被两个动作同时抢 —— 网页 onTap 的「切控制条」
-   靠 window.__nativeTapAt 防重入，可那个时间戳是在 fireOverlay() 里赋的，而
-   fireOverlay 要等 evaluateJavascript→__nativeTapOverlay 的异步回调，网页
-   pointerup 早跑完了 → 守卫生效不了 → 一次点击频道列表和控制条一起弹出来。
-   浮层开着时长按不插手（长按多半落在浮层的频道项上）。 */
-window.__tvToggleCtrl = function(){
-  try{
-    if(anyOvOpen()) return;
-    var c=$("ctrl");
-    if(c.classList.contains("hide")){ hideCtrlLater(); }
-    else { c.classList.add("hide"); syncDimmer(); }
-  }catch(e){}
-};
 
-/* ---------- 触屏手势（手机，电视家风格）----------
-   · 单击屏幕：不在这里处理 —— 由原生 dispatchTouchEvent 判定
-     （左半屏 = 频道列表浮层 / 右半屏 = 设置浮层，v2.10.9 定稿）
-   · 长按屏幕：唤出/收起控制条（v2.10.25，同样在原生层判定）
-   · 双击屏幕：进/出全屏
-   · 左半边上下滑：调亮度；右半边上下滑：调音量（带手势指示）
-   ★ 只剩「双击 / 亮度 / 音量」还留在网页层：这三个只在本机源有效（官网源时
-     官方页 pageView 盖在最上层，主 WebView 收不到任何触摸）。
-   判定：click 的坐标与 target 都可靠（touch 的 clientX 在 WebView 常为 NaN）。 */
-/* ---------- 控制条 / 浮层的落点命中判定（★ 必须是全局） ----------
-   ★ v2.10.25：这两个函数过去定义在 bindTouchGestures() **闭包内部**，而
-   window.__nativeTapOverlay（定义在顶层）也引用它们 —— 一调用就抛
-   ReferenceError，被它自己的 catch 吞掉后**恒返回 true**，等于「点在控制条 /
-   浮层等可点 UI 上就不弹浮层」这道保护从来就没生效过。实测：官网源在播时
-   点控制条上的「暂停」，原生照样再弹一个浮层出来（与用户贴的「两个 UI 叠在
-   一起」同源）。提到全局后判定才真正起作用。 */
+/* ---------- 触屏 / 点击手势（v2.10.38 收归网页层）----------
+   PAGE_UNDER_WEB 后主 WebView 永在最上层、触摸必然到达这里 —— 单击唤浮层的
+   落点判定改用 click target **同步**完成，不再走原生的 evaluateJavascript 往返
+   （那个异步窗口正是 v2.10.36 整包静默窗/连击串补丁的根源）。
+   · 单击空白：左半屏 = 频道列表 / 右半屏 = 设置（本次 click 内同步 open*）
+   · 上下滑：左半边亮度 / 右半边音量（带手势指示）
+   · 长按 = 控制条、双击 = 全屏随控制条一起退役（入口并入设置浮层） */
+/* ---------- 落点命中判定（★ 必须是全局，v2.10.25 教训：放闭包里会 ReferenceError） ---------- */
 function inCtrl(t){ return t && t.closest && (t.closest("#ctrl")||t.closest(".ctlbtn")||t.closest(".line-item")); }
 function inOv(t){ return t && t.closest && (t.closest(".ov")); }
 
-var touchState = { x:0, y:0, mode:null, timer:null, lastTap:0, lastPointer:0, moved:false };
+function bindTapToOpen(){
+  /* 连击序列（v2.10.36 语义的网页轻量版）：间隔 < BURST_GAP 的连续点击算「手指这一串」，
+     串里只要点中过自有 UI / 关过浮层，剩下的点击一律不再开新浮层 —— 手指没停说明
+     用户没打算开新的。★ 与原生静默窗的本质区别：被抑制的点击**不刷新任何时间戳**，
+     序列只在「间隔超限」时结束 —— 不会出现「每吃一击续 700ms」的自我延续。
+     BURST_GAP 取 1200：真实手指连击间隔 300~500ms，但 click 派发受系统调度 +
+     adb input tap 开销（探针实测单次 ~430ms）影响，800 会漏。 */
+  var BURST_GAP = 1200, lastT = 0, muted = false;
+  document.addEventListener("click", function(e){
+    try{
+      var now = Date.now();
+      if(now - lastT >= BURST_GAP) muted = false;    /* 停手够久 → 新的一串 */
+      lastT = now;
+      if(!$("player").classList.contains("show")) return;
+      var t=e.target;
+      /* 自有 UI 自己处理：顶栏(收藏)、浮层、确认卡、toast 按钮不参与唤浮层；
+         且这一串视为「在与 UI 互动」，不再开新浮层 */
+      if(t.closest && t.closest("#ctrl,.ov,#errCard,#toasts")){ muted = true; return; }
+      if(anyOvOpen()) return;      /* 浮层铺满全屏，点击都落在它身上（ovClickClose 负责关） */
+      if(muted) return;
+      /* 刚关浮层的连点保护：__ovClosedAt 是固定时点，这里只读不写 */
+      if(now - (__ovClosedAt||0) < OV_QUIET){ muted = true; return; }
+      var left = (isFinite(e.clientX) ? e.clientX : 0) * 2 < window.innerWidth;
+      if(left) openChOv(); else openSetOv();
+    }catch(err){}
+  });
+}
+
+var touchState = { x:0, y:0, mode:null, moved:false, gTimer:null };
 function bindTouchGestures(){
   var wrap=$("player");
-
-  /* 单击 / 双击判定（click + pointerup 兜底） */
-  function onTap(e){
-    if(inCtrl(e.target)) return;
-    /* v2.10.9：原生单击唤浮层的手势，同一次 click 不再切控制条 */
-    if(Date.now() - (window.__nativeTapAt||0) < 400) return;
-    /* ★ v2.10.36：浮层刚关的这一拍，任何 click 都不再参与「双击 → 全屏」判定。
-       连点的第二下落到这里时 anyOvOpen() 已是 false，不挡就会判成双击全屏。 */
-    if(Date.now() - (__ovClosedAt||0) < OV_QUIET) return;
-    /* v2.10：浮层开着时不在这里处理 —— 点击交给 .ov 自己的 click listener
-       （频道项 onclick 换台 / 空白处关闭）。★ 不能在这里 closeAllOv：
-       pointerup 先把浮层 display:none 的话，后续 click 落不到频道项上，
-       「点浮层里的频道换台」就整个失灵（实测踩到）。 */
-    if(anyOvOpen()) return;
-    if(inOv(e.target)) return;
-    var now=Date.now();
-    if(now-touchState.lastTap < 320){          /* 双击 → 全屏 */
-      clearTimeout(touchState.timer); touchState.lastTap=0;
-      toggleFs();
-    }else{
-      touchState.lastTap=now;
-      clearTimeout(touchState.timer);
-      touchState.timer=setTimeout(function(){
-        /* ★ v2.10.25：单击不再切控制条（控制条改由长按唤出，见 __tvToggleCtrl）。
-           单击的职责整体让给原生的「左半屏=频道列表 / 右半屏=设置」，这里只负责
-           把控制条里的二级面板（线路 / 节目单）收掉。 */
-        if($("linePanel").classList.contains("show") || $("epg").classList.contains("show")){
-          closeLinePanel(); $("epg").classList.remove("show");
-        }
-      }, 320);
-    }
-  }
-  wrap.addEventListener("pointerup", function(e){
-    touchState.lastPointer = Date.now();
-    onTap(e);
-  });
-  wrap.addEventListener("click", function(e){
-    if(Date.now() - touchState.lastPointer < 350) return;   /* pointerup 已处理 */
-    onTap(e);
-  });
-
-  /* 亮度/音量手势：触摸移动跟踪
-     ★ v2.10.25：这里原有「按住 450ms → 长按待滑 → 横滑唤浮层」的那套逻辑
-     （lp / lpT / lpUsed + showGestureInd 提示），已被原生层取代 ——
-     原生长按 = 控制条、原生单击 = 左半屏频道列表 / 右半屏设置浮层。
-     两套并存时（本机源下网页层也收得到触摸）一次长按会同时弹出控制条和浮层。 */
+  /* 亮度/音量手势：触摸移动跟踪（只认竖向滑；横向滑动不处理） */
   wrap.addEventListener("touchstart", function(e){
     if(e.touches.length!==1) return;
     if(inCtrl(e.target)) return;
@@ -2440,7 +2233,6 @@ function bindTouchGestures(){
     var dx=x-touchState.startX, dy=y-touchState.startY;
     if(Math.abs(dy) < 14 && Math.abs(dx) < 14) return;
     if(!touchState.mode){
-      /* 只认竖向滑（亮度/音量）—— 横向滑动不处理 */
       if(Math.abs(dy) > Math.abs(dx)){
         touchState.mode = (touchState.startX < window.innerWidth/2) ? "bright" : "vol";
       }
@@ -2580,22 +2372,13 @@ function closeAllOv(){
   var was = anyOvOpen();
   clearTimeout(__ovAutoT); __ovAutoT=null;
   closeChOv(); closeSetOv();
-  /* ★ v2.10.36：记下「刚关过」的时刻（连点防抖的地面真值）。
-     根因实测（tools/_probe_ovtap.py）：closeAllOv() 一执行，.ov 立刻 display:none，
-     原生 __nativeTapOverlay 的 elementFromPoint 马上就返回「视频空白」—— 于是
-     连点的第二下被原生当成「点空白」，左半屏 → 直接 openChOv() 弹出频道列表；
-     再点几下就落到频道项上换台（用户原话：「点两次频道列表莫名弹出 / 点多了
-     莫名其妙换频道」）。这条时间戳就是让原生知道「浮层刚关，别当空白」。 */
-  if(was){
-    __ovClosedAt = Date.now();
-    /* 同步告诉原生（不等它的下一次 evaluateJavascript）：这条路是给
-       fireOverlayIfFree 那条「加载中捷径」用的 —— 捷径不问网页，只能靠这里
-       传过去。见 MainActivity.gOvClosedT。 */
-    try{ if(window.NativeTV && NativeTV.notifyOvClosed) NativeTV.notifyOvClosed(); }catch(e){}
-    syncDimmer();
-  }
+  /* ★ 记下「刚关过」的时刻：连点的第二下若落在 700ms 内，bindTapToOpen 会
+     读这个固定时点把它忽略（点空白关浮层 → 立刻再点 ≠ 想开列表）。
+     ★ v2.10.38：这里是**固定时点、只读不写** —— 原生静默窗时代「每吃一击
+     就续 700ms」的自我延续问题在网页层不存在（被吃的点击不会再刷新它）。 */
+  if(was){ __ovClosedAt = Date.now(); }
 }
-/** 浮层刚关闭时刻；OV_QUIET 内一律不把点击当「视频空白」（见 __nativeTapOverlay） */
+/** 浮层刚关闭时刻；OV_QUIET 内 bindTapToOpen 不再唤浮层（连点保护） */
 var __ovClosedAt = 0;
 /* ★ 700ms 不是随手取的：真人「点一下没反应 → 再点一下」的间隔实测在 400~700ms
    （tools/_probe_ovtap.py 里两下 input tap 相隔 449ms，人手只会更慢）。早先按
@@ -2640,35 +2423,15 @@ try{ $("chOv").addEventListener("click", ovClickClose); $("setOv").addEventListe
    命中控制条 / 确认卡 / 线路面板 / 节目单 / 浮层本身 → 返回 false 不唤浮层
    （浮层是 alpha0.35 的 pageView 在最上层，一旦弹出这些 UI 就点不到了）。
    坐标是原生物理像素，要按 devicePixelRatio 换算成 CSS 像素。 */
-window.__nativeTapOverlay = function(px, py){
-  try{
-    /* ★ v2.10.36 连点防抖：浮层刚关（.ov 已 display:none）的这一小段里，
-       elementFromPoint 会立刻回报「视频空白」，原生的下一次单击就会照
-       「左半屏=频道列表 / 右半屏=设置」再开一个新浮层 —— 用户点一下关不掉、
-       点两下弹出频道列表、点多了换台，全是这一条。返回 false = 当作「点在
-       可交互 UI 上」，原生这一次就不插手（这一下本来就该被吃掉）。 */
-    if(Date.now() - (__ovClosedAt||0) < OV_QUIET) return false;
-    var dpr = window.devicePixelRatio || 1;
-    var el = document.elementFromPoint(px / dpr, py / dpr);
-    if(!el) return true;                     /* 视频区空白 → 唤 */
-    if(inCtrl(el) || inOv(el)) return false; /* 控制条 / 浮层 */
-    if(el.closest && el.closest("#errCard,#linePanel,#epg")) return false; /* 确认卡/面板 */
-    return true;
-  }catch(e){ return true; }
-};
 
 /* TV：BACK = 确认退出卡（用户定稿）。由 MainActivity doBack 的 TV 分支调用，
    返回 '1' 表示已消费（浮层关闭 / 确认卡已弹）。 */
 window.__tvBack = function(){
   if(anyOvOpen()){ closeAllOv(); return "1"; }
   if($("player").classList.contains("show")){
-    /* ★ 确认卡画在主 WebView 里，官方页 pageView 盖在上面会把它挡住 ——
-       弹卡后调 syncDimmer 降它的 alpha 让卡透出来（syncDimmer 把 #errCard
-       也算作「需要透出的 UI」），「继续观看」时 hideErrCard + syncDimmer 恢复。 */
     showErrCard({ title:"确定退出纯净电视？", desc:"退出后将停止播放",
       btns:[{label:"退 出", primary:true, fn:function(){ try{ NativeTV.exitApp(); }catch(e){} }},
-            {label:"继续观看", fn:function(){ hideErrCard(); syncDimmer(); }}] });
-    syncDimmer();
+            {label:"继续观看", fn:function(){ hideErrCard(); }}] });
     return "1";
   }
   return "0";
@@ -2787,17 +2550,12 @@ function renderChOvSrc(){
   });
 }
 function openChOv(){
-  if(ovOpen("ch")) return;                /* 已开着（原生手势会重复触发） */
+  if(ovOpen("ch")) return;                /* 已开着（原生手势/TV键会重复触发） */
   CHOV.src = (srcMode==="wvt" && WVT.ready) ? "wvt" : "local";
   CHOV.group = (CHOV.src==="wvt") ? WVT.cur : curCat;
   closeSetOv();
-  /* ★ v2.10.25：控制条与浮层不再叠在一起（它们过去被同一次单击同时唤出）。
-     浮层一开就把控制条收掉，关浮层后画面干净，控制条要靠长按再唤。 */
-  $("ctrl").classList.add("hide");
   $("chOv").classList.add("show");
   __ovGuardUntil = Date.now() + OV_GUARD;   /* 见 ovClickClose 注释 */
-  /* 官网页盖在浮层上面：临时降 alpha（只让位，页面媒体继续跑） */
-  syncDimmer();
   renderChOvSrc(); renderChOvCats(); renderChOvChs();
   ovAutoKeep();
 }
@@ -2806,11 +2564,9 @@ function openChOv(){
 function openSetOv(){
   if(ovOpen("set")) return;
   closeChOv();
-  $("ctrl").classList.add("hide");        /* 同上：不与控制条叠加 */
   renderSetPanel();
   $("setOv").classList.add("show");
   __ovGuardUntil = Date.now() + OV_GUARD;
-  syncDimmer();
   ovAutoKeep();
 }
 function renderSetPanel(){
@@ -2832,6 +2588,29 @@ function renderSetPanel(){
     opt(srcBox, t[1], srcMode===t[0], function(){
       if(srcMode!==t[0]){ closeAllOv(); setSrc(t[0]); }
     });
+  });
+  /* 播放控制（v2.10.38：底部控制条删除，节目单/线路/秒开/暂停/全屏入口全部收进这里；
+     收藏保留在顶栏 ☆，这里再给一个入口方便遥控器） */
+  var pbBox=sec("播放控制");
+  var paused = NATIVE.active ? isNativePaused : ($("v") && $("v").paused);
+  opt(pbBox, paused ? "▶ 播放" : "⏸ 暂停", false, function(){
+    if(NATIVE.active){
+      if(!isNativePaused){ if(window.NativeTV && NativeTV.nativePause){ NativeTV.nativePause(); isNativePaused=true; } }
+      else if(window.NativeTV && NativeTV.nativeResume){ NativeTV.nativeResume(); isNativePaused=false; }
+    } else { var v=$("v"); if(v.paused){ v.play(); } else { v.pause(); } }
+    setPlayBtnUI();          /* 内部会重渲染本面板，刷新「播放/暂停」文案 */
+  });
+  opt(pbBox, isFsMode() ? "退出全屏" : "全屏", false, function(){ toggleFs(); });
+  opt(pbBox, (TUNE !== "stable") ? "⚡ 秒开 → 点切「稳定」" : "🛡 稳定 → 点切「秒开」", false,
+      function(){ setTune(TUNE === "fast" ? "stable" : "fast"); });
+  opt(pbBox, isFav(cur.tid,cur.id) ? "★ 取消收藏" : "☆ 收藏当前频道", isFav(cur.tid,cur.id),
+      function(){ toggleFav(cur.tid,cur.id,cur.name); setFavBtnUI(); });
+  opt(pbBox, "📺 节目单", false, function(){
+    closeAllOv(); closeLinePanel(); renderEpg(); $("epg").classList.add("show");
+  });
+  opt(pbBox, "🔄 切换线路", false, function(){
+    closeAllOv(); $("epg").classList.remove("show"); openLinePanel();
+    if(IS_TV){ try{ var li=document.querySelector("#lineGrid .line-item"); if(li) li.focus(); }catch(e){} }
   });
   /* 画面比例（与 btnRatio 同一套 contain/cover/fill） */
   var ratios=[["contain","适应"],["cover","铺满"],["fill","拉伸"]];
@@ -2892,42 +2671,11 @@ function autoStartFirst(){
 function init(){
   if(IS_TV) document.body.classList.add("tv");
   /* v2.10.6：旧列表页删除 —— 启动即全屏播放；源切换/换台全在 chOv 浮层 */
-  $("btnFs").onclick=toggleFs;
-  $("btnEpg").onclick=function(){
-    var b=$("epg"); b.classList.toggle("show");
-    closeLinePanel();
-    if(b.classList.contains("show")) renderEpg();
-    $("btnEpg").className="ctlbtn"+(b.classList.contains("show")?" act":"");
-    resetCtrlTimer();
-  };
-  $("btnLines").onclick=function(){
-    var p=$("linePanel");
-    $("epg").classList.remove("show"); $("btnEpg").className="ctlbtn";
-    p.classList.toggle("show");
-    $("btnLines").className="ctlbtn"+(p.classList.contains("show")?" act":"");
-    resetCtrlTimer();
-  };
-  $("btnPlay").onclick=function(){
-    /* 播放/暂停切换 */
-    if(NATIVE.active){ if(window.NativeTV && NativeTV.nativePause && !isNativePaused){ NativeTV.nativePause(); isNativePaused=true; } else if(window.NativeTV && NativeTV.nativeResume){ NativeTV.nativeResume(); isNativePaused=false; } }
-    else { var v=$("v"); if(v.paused){ v.play(); } else { v.pause(); } }
-    setPlayBtnUI();
-    resetCtrlTimer();
-  };
-  $("btnRatio").onclick=function(){
-    var v=$("v"), ratios=["contain","cover","fill"], i=(v.dataset.ri|0)+1;
-    if(i>=ratios.length) i=0;
-    v.dataset.ri=i; v.style.objectFit=ratios[i];
-    toast("画面比例："+ratios[i]);
-    resetCtrlTimer();
-  };
   $("btnFav").onclick=function(){ toggleFav(cur.tid,cur.id,cur.name); setFavBtnUI(); };
-  /* 播放档位：秒开 ⇄ 稳定（原生缓冲门槛 + 软解缓冲一起切） */
-  $("btnTune").onclick=function(){ setTune(TUNE === "fast" ? "stable" : "fast"); resetCtrlTimer(); };
-  /* 播放信息角标：点一下在 关 → 简 → 详 之间循环（v2.8） */
-  $("statBadge").onclick=function(){ cycleStatsMode(); resetCtrlTimer(); };
 
-  /* 触屏手势：双击全屏 / 单击唤出控制条 / 亮度音量（手机端） */
+  /* v2.10.38：单击唤浮层（左=频道列表 / 右=设置）—— 收归网页层，同步判定 */
+  bindTapToOpen();
+  /* 亮度/音量手势（触屏） */
   bindTouchGestures();
 
   /* ★ 后台暂停：切后台/锁屏时暂停播放，回前台恢复（软解 + 原生双通道）
@@ -2998,7 +2746,6 @@ function init(){
   });
 
   /* 时钟刷新 */
-  updateClock(); setInterval(updateClock, 30000);
 
   /* ===== 遥控器 / 键盘方向键导航（TV 版核心） ===== */
   /* ★ 只取真正可见的元素：切数据源会整行隐藏 tabs / grpbar，
@@ -3107,17 +2854,18 @@ function init(){
       if(!ctlFocus){ e.preventDefault(); openChOv(); return; }
     }
 
-    if(inPlayer){ $("ctrl").classList.remove("hide"); resetCtrlTimer(); syncDimmer();
-      /* 全屏时按「返回」先退全屏；这里用 KEYCODE_BACK 由原生接管，不重复处理 */
-      var plist=listOf(".ctlbtn").concat(listOf("#lineGrid .line-item"));
-      if(plist.indexOf(ae)<0){
-        var fl=listOf("#lineGrid .line-item")[cur.idx]||listOf("#lineGrid .line-item")[0]; if(fl){ fl.focus(); return; }
+    if(inPlayer){
+      /* v2.10.38：控制条已删。焦点只可能落在顶栏收藏 / linePanel / epg ——
+         OK = 点击；面板开着时方向键在面板条目间移动 */
+      if(OK.indexOf(k)>=0){ if(ae&&typeof ae.click==="function"&&ae.tagName!=="INPUT"){ ae.click(); e.preventDefault(); } return; }
+      var panel = ae && ae.closest && ae.closest("#linePanel");
+      if(panel && (k===37||k===38||k===39||k===40)){
+        e.preventDefault();
+        var items=[].slice.call(panel.querySelectorAll(".line-item")).filter(function(x){ return x.getClientRects().length>0; });
+        var ii=items.indexOf(ae), nx=items[ii+((k===39||k===40)?1:-1)];
+        if(nx) nx.focus(); else if(items[0]) items[0].focus();
+        return;
       }
-      var pi=plist.indexOf(ae);
-      if(OK.indexOf(k)>=0){ if(ae&&typeof ae.click==="function"&&ae.tagName!=="INPUT"){ ae.click(); } e.preventDefault(); return; }
-      if(k===37||k===38||k===39||k===40){ e.preventDefault();
-        if(pi<0){ if(plist[0]) plist[0].focus(); return; }
-        var np=plist[pi+((k===39||k===40)?1:-1)]; if(np) np.focus(); return; }
       return;
     }
     /* v2.10.7：旧列表页已整体退役，焦点只可能落在播放层或浮层内，
