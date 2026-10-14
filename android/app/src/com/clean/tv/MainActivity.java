@@ -550,6 +550,27 @@ public class MainActivity extends Activity {
         web.postDelayed(new Runnable() {
             @Override public void run() {
                 try {
+                    /* ★ v2.10.40 热身只对「空闲备用实例」做：ensurePageView 会返回
+                       现有实例，而 v2.10 起冷启动自动起播（频道快照 1~3s 就绪）可能
+                       已经在这个 5s 窗口里用同一个实例打开了官方直播页 —— 无条件
+                       loadUrl("about:blank") 会把正在加载/已起播的官方页整个冲掉：
+                       · 页面已报 playing → pagePlayingSeen=true（原生 40s 看门狗
+                         收兵）+ 注入脚本不在 about:blank 上（没人报失败）→
+                         没有任何一方发现页面没了，屏幕从此黑屏，切台才恢复
+                         （用户实测：冷启动首播短暂正常后转黑，重启必现）；
+                       · 页面还没起播 → 白吃一次 40s 看门狗换线（实测冷启动起播
+                         28~54s 的主因，c2 日志 14:50:00 开页 → 14:50:40 换线）。
+                       判据：pageView 已挂上 root（showPage 在用）或 pageUrlNow
+                       非空（真实页面在途）→ 本轮热身让位，下轮 hidePage 的预热
+                       接力自然会补上热实例。 */
+                    if (pageView != null && pageView.getParent() != null) {
+                        android.util.Log.i("CleanTV/LC", "pageView 预热跳过（官方页在用）");
+                        return;
+                    }
+                    if (pageUrlNow != null && pageUrlNow.length() > 0) {
+                        android.util.Log.i("CleanTV/LC", "pageView 预热跳过（页面在途）");
+                        return;
+                    }
                     WebView v = ensurePageView();
                     if (v != null) v.loadUrl("about:blank");
                     android.util.Log.i("CleanTV/LC", "pageView 预热完成");
