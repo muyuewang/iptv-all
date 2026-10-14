@@ -69,8 +69,8 @@ import atexit
 import queue
 import ctypes
 import threading
-from ctypes import (wintypes, c_void_p, c_wchar_p, c_ulong, POINTER,
-                    Structure, WINFUNCTYPE, cast, byref, c_ubyte)
+from ctypes import (wintypes, c_void_p, c_wchar_p, c_ulong, c_longlong,
+                    POINTER, Structure, WINFUNCTYPE, cast, byref, c_ubyte)
 
 IS_WIN = sys.platform.startswith("win")
 
@@ -137,6 +137,7 @@ IID_CTRL_HANDLER = _guid("6c4819f3-c9b7-4260-8127-c9f5bde7f68c")
 IID_EXEC_HANDLER = _guid("49511172-cc67-4bca-9923-137112f4c4cc")
 IID_ADDSCRIPT_HANDLER = _guid("b99369f3-9b11-47b5-bc6f-8e7895fcea17")
 IID_SETTINGS2 = _guid("ee9a0f68-f46c-4e32-ac23-ef8cac224d2a")
+IID_NEWWIN_HANDLER = _guid("d4c185fe-c81c-4989-97af-2d3f-a7ab5651")
 
 # ---------------------------------------------------------------- vtable 调用
 PVOID = c_void_p
@@ -235,6 +236,23 @@ def _mk_handler(iid, fn):
     obj = ComObject(iid, [(FT, invoke)])
     # ★ 调用方必须持有返回的 obj 直到回调确认交付；这里再挂一份带时间戳的
     #   保活（_prune_handlers 定期清理 120 秒前的旧回调），双保险防 GC 悬空。
+    _LIVE_HANDLERS.append((time.time(), obj))
+    _prune_handlers()
+    return obj
+
+
+def _mk_event_handler(iid, fn):
+    """构造一个「Invoke(sender, args)」形状的**事件**回调（与完成回调形状不同）。"""
+    FT = WINFUNCTYPE(ctypes.HRESULT, PVOID, PVOID, PVOID)
+
+    def invoke(this, sender, args):
+        try:
+            fn(sender, args)
+        except Exception:
+            pass
+        return S_OK
+
+    obj = ComObject(iid, [(FT, invoke)])
     _LIVE_HANDLERS.append((time.time(), obj))
     _prune_handlers()
     return obj
@@ -379,6 +397,8 @@ class EmbeddedBrowser:
         self._quit = False
         self._sta_ready = threading.Event()
         self.ua = None                   # 当前生效的 UA 标记（'MOBILE' / None）
+        self.playing_hint = False        # 主页面是否已在播（native_app 维护）
+        self._popup_guard_on = False     # 弹窗拦截是否已注册（随 core 重建）
         self.host_hwnd = None
         self.size = (1280, 720)
         self.page_url = ""
@@ -955,10 +975,66 @@ class EmbeddedBrowser:
             _vtbl_call(self._settings, 14, _FN_PUT_INT, 0)   # AreDefaultContextMenusEnabled
         except Exception:
             pass
+        self._register_popup_guard()
         self.log("WebView2 就绪（UA=%s 原生切换=%s）"
                  % (ua or "PC", bool(self._settings2)))
         self._flush_pending_extra()
         return True
+
+    def _register_popup_guard(self):
+        """注册 NewWindowRequested 拦截（每次 core 重建后调一次）。
+
+        ★ 不拦截的后果（实测）：页面 window.open / target=_blank 弹出的
+          WebView2 独立顶层窗口归本 exe 所有 —— 任务栏显示成主程序图标、
+          里面照播视频、关主窗口也不跟着关；切一次台攒一个，用户看到的
+          就是「桌面多了好几个纯净直播窗口」。
+        处置：弹窗一律拦下（put_Handled）；若主页面还没播起来，弹窗很
+        可能才是真正的播放页 → 主控件跟进导航过去。
+        """
+        if not self._core:
+            return
+        self._popup_guard_on = True
+
+        def on_new_window(sender, args):
+            uri = None
+            try:
+                out = c_void_p()                       # get_Uri（vtbl 3）
+                if _vtbl_call(args, 3, _FN_GET_WSTR, byref(out)) == S_OK \
+                        and out.value:
+                    uri = cast(out, c_wchar_p).value
+                    ctypes.windll.ole32.CoTaskMemFree(out)
+            except Exception:
+                pass
+            try:
+                _vtbl_call(args, 6, _FN_PUT_INT, 1)    # put_Handled = true
+            except Exception:
+                pass
+            if uri:
+                u = uri
+                http = u.startswith("http")
+                self.log("已拦截弹窗：%s%s" % (u[:90], "" if self.playing_hint
+                                              else "（页面未播 → 跟进导航）"))
+                # ★ 只有真实网页才跟进；window.open('') 之类的空白弹窗
+                #   （about:blank）跟过去会把还没起播的主页面整个冲掉
+                if not self.playing_hint and http:
+                    self._post(lambda: self._follow_popup(u), 0)
+
+        h = _mk_event_handler(IID_NEWWIN_HANDLER, on_new_window)
+        try:
+            tok = c_longlong(0)
+            _vtbl_call(self._core, 44, _FN_ADD_NEWWIN, h.ptr(), byref(tok))
+        except Exception as e:                   # noqa: BLE001
+            self.log("注册弹窗拦截失败：%r" % (e,))
+
+    def _follow_popup(self, url):
+        """主控件跟进弹窗 URL（只准在 STA 泵上跑）。"""
+        if self._closed or not self._core:
+            return
+        try:
+            _vtbl_call(self._core, 5, _FN_NAVIGATE, c_wchar_p(url))
+            self.page_url = url
+        except Exception as e:                   # noqa: BLE001
+            self.log("弹窗跟进导航失败：%r" % (e,))
 
     def _job_quiet_page(self, gen):
         """生成器：把页面静音/停流并导航到 about:blank（代次守卫）。"""
@@ -1029,6 +1105,8 @@ class EmbeddedBrowser:
         self._env = None
         self._inject_id = None
         self._extra_ids = []
+        self._popup_guard_on = False
+        self.playing_hint = False
         self.page_url = ""
         self._hidden = False
 
@@ -1106,3 +1184,7 @@ _FN_EXEC = WINFUNCTYPE(ctypes.HRESULT, PVOID, c_wchar_p, PVOID)
 _FN_PUT_BOUNDS = WINFUNCTYPE(ctypes.HRESULT, PVOID, wintypes.RECT)
 _FN_CTRL_VOID = WINFUNCTYPE(ctypes.HRESULT, PVOID)
 _FN_BAD2 = WINFUNCTYPE(ctypes.HRESULT, PVOID, PVOID, PVOID)
+# add_NewWindowRequested(This, handler, EventRegistrationToken*) —— token 是
+# 一个 int64 值结构，这里只当出口槽用（不打算反注册，进程期不 remove）
+_FN_ADD_NEWWIN = WINFUNCTYPE(ctypes.HRESULT, PVOID, PVOID,
+                             POINTER(c_longlong))

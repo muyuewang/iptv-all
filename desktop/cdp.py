@@ -34,6 +34,53 @@ import urllib.request
 IS_WIN = os.sys.platform.startswith("win")
 IS_MAC = os.sys.platform == "darwin"
 
+
+def _hide_from_taskbar(proc):
+    """把嗅探浏览器的顶层窗口从任务栏 / Alt-Tab 里摘掉。
+
+    离屏窗口（--window-position=-32000）只是看不见，任务栏照样有按钮 ——
+    悬停还能看到里面在播的视频，用户会当成「泄漏的浏览器进程」手动去关
+    （实测反馈）。WS_EX_TOOLWINDOW 一加就没有任务栏按钮了。
+    """
+    if not IS_WIN or not proc or proc.poll() is not None:
+        return
+    import ctypes
+    import threading as _th
+
+    def work():
+        u32 = ctypes.windll.user32
+        pid = proc.pid
+        found = []
+
+        def _enum_cb(hwnd, _lp):
+            wpid = ctypes.c_ulong(0)
+            u32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+            if wpid.value == pid and u32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return 1
+
+        CMPFUNC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p,
+                                     ctypes.c_void_p)
+        GWL_EXSTYLE = -20
+        WS_EX_TOOLWINDOW = 0x00000080
+        WS_EX_APPWINDOW = 0x00040000
+        for _ in range(20):                     # 窗口可能还没建好，最多等 4s
+            found[:] = []
+            u32.EnumWindows(CMPFUNC(_enum_cb), 0)
+            if found:
+                break
+            time.sleep(0.2)
+        for h in found:
+            try:
+                style = u32.GetWindowLongPtrW(h, GWL_EXSTYLE)
+                u32.SetWindowLongPtrW(
+                    h, GWL_EXSTYLE,
+                    (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+            except Exception:
+                pass
+
+    _th.Thread(target=work, daemon=True).start()
+
 # ---------------------------------------------------------------- 媒体判定
 MEDIA_HINT = (".m3u8", ".flv", ".ts", ".mp4", ".mkv", ".mpd", ".m4s")
 # 统计/埋点类域名（这些 URL 里常带 playtime / 上报参数，要排除掉）
@@ -351,6 +398,7 @@ def launch_browser(url, port=None, offscreen=True, headless=False,
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, creationflags=flags)
     _BROWSER_PROCS.append((proc, udd))
+    _hide_from_taskbar(proc)
     return proc, port, udd
 
 

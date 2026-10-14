@@ -2331,7 +2331,7 @@ class NativeApp:
             r = None
             try:
                 r = _cdp.sniff_stream(
-                    url, timeout=15, offscreen=True,
+                    url, timeout=15, offscreen=True, retry_visible=False,
                     profile_dir=self.sniff_dir,
                     log=lambda *a: self._log(" ".join(str(x) for x in a)))
             except Exception as e:      # noqa: BLE001
@@ -2359,6 +2359,13 @@ class NativeApp:
         if seq != self._embed_seq or st == self._web_state:
             return
         self._web_state = st
+        # 弹窗拦截的判据（embed.py _register_popup_guard）：主页面在播 →
+        # 弹窗只可能是广告/推广，直接拦死；没在播 → 弹窗可能是真播放页，跟进。
+        if self.embed is not None:
+            try:
+                self.embed.playing_hint = (st == "playing")
+            except Exception:
+                pass
         self._log("页面状态变化：%s%s（seq=%d 线路%d/%d）"
                   % (st or "(空)", "（" + reason + "）" if reason else "",
                      seq, self.cur["idx"] + 1,
@@ -2420,6 +2427,10 @@ class NativeApp:
         self._web_state = ""
         if self.embed is None:
             return
+        try:
+            self.embed.playing_hint = False
+        except Exception:
+            pass
         if hide:
             self.embed.hide()
         elif wait:
