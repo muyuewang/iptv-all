@@ -114,12 +114,8 @@
   /* 控制条容器：v2.10.38 底部控制条已删，只剩顶栏（频道名+收藏）与两块面板 */
   #ctrl{display:block;}
   .ctlbar{pointer-events:auto;}
-  /* 顶部栏：返回 + 频道名 + 收藏 */
-  #topbar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;
-    padding:14px 16px 30px;z-index:3;
-    background:linear-gradient(180deg,rgba(8,9,13,.9) 0%,rgba(8,9,13,.5) 60%,transparent 100%);}
-  #topbar .cname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;
-    font-size:15px;color:#fff;text-shadow:0 1px 6px rgba(0,0,0,.8);}
+  /* v2.10.39：顶栏（频道名+收藏）整体删除 —— 直播流自带台标，左上角常驻频道名
+     与它叠在一起（用户反馈）；收藏入口在设置浮层「播放控制」区。 */
   .ctlbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;padding:8px 4px;
     border-radius:var(--r-sm);color:var(--fg);background:transparent;border:none;cursor:pointer;
     font-size:11px;transition:background .18s var(--ease),transform .18s var(--ease);}
@@ -207,8 +203,6 @@
   body.tv #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;border-top:none;
     background:transparent;pointer-events:none;}
   body.tv .ctlbar{pointer-events:auto;}
-  body.tv #topbar{padding:20px 40px 40px;}
-  body.tv #topbar .cname{font-size:24px;}
   body.tv .ctlbtn{font-size:15px;padding:12px 8px;}
   body.tv .ctlbtn .ic{font-size:28px;}
   body.tv #linePanel .grid{grid-template-columns:repeat(6,1fr);gap:14px;}
@@ -446,14 +440,9 @@
        从来不需要浏览器原生控件。 -->
   <div id="vwrap"><video id="v" poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" playsinline webkit-playsinline preload="auto" x5-video-player-type="h5-page" tabindex="0"></video></div>
   <div id="ctrl">
-    <!-- 顶部栏：频道名 + 收藏（v2.10.1：「返回」按钮移除 —— 全屏播放为主界面，
-         没有可「返回」的列表页；退出统一走 BACK 的确认退出卡） -->
-    <div id="topbar" class="ctlbar">
-      <div class="cname" id="cname">—</div>
-      <button class="ctlbtn" id="btnFav" tabindex="0"><span class="ic">☆</span><span class="lb">收藏</span></button>
-    </div>
     <!-- v2.10.38：底部控制条（节目单/线路/秒开/暂停/比例/全屏）整体删除，
-         功能入口全部迁入设置浮层（renderSetPanel「播放控制」区）。 -->
+         功能入口全部迁入设置浮层（renderSetPanel「播放控制」区）。
+         v2.10.39：顶栏（频道名+收藏）也删了 —— 直播流自带台标，收藏在设置浮层。 -->
     <!-- 线路选择弹层 -->
     <div id="linePanel">
       <div class="ttl">选择线路</div>
@@ -650,6 +639,12 @@ function setStatus(t, busy){
   var s=$("status"); if(!s) return;
   if(t == null){ hideStatus(); return; }
   s.classList.remove("hide");
+  /* ★ v2.10.39：status 一接管，webmask 必须退场 —— v2.10.37 起「开官方页前
+     setFrameOn()」，而 status 有「播放中透明底」规则（body.frame-on 时背景透明，
+     为了本机源换台不挡旧画面），结果盖不住下面的 webmask，两层加载文案/转圈
+     叠在一起（用户截图：频道名和「正在打开官方直播页」重叠）。
+     status 在，webmask 就走 —— 全部加载流程都会紧跟 setStatus，兜底语义不变。 */
+  try{ $("webmask").classList.remove("show"); }catch(e){}
   var sub=s.querySelector("#stSub"); if(sub) sub.textContent = t;
   var sp=s.querySelector(".sp"); if(sp) sp.style.display = busy ? "inline-block" : "none";
 }
@@ -744,8 +739,6 @@ function openChannel(tid, id, name){
      Java 侧上一次退出时钉下的那一帧立刻透出来当背景 —— 用户看到的是
      「画面还在，下面一行正在解析线路…」，而不是一块黑。不必在这里判断
      有没有帧：没有帧时露出的就是原来的黑，和旧行为一致。 */
-  $("cname").textContent=name;
-  setFavBtnUI();
   $("epg").classList.remove("show");
   closeLinePanel();
   showPlayerLayer();
@@ -1018,15 +1011,6 @@ function cacheLine(key, best){
     ks.sort(function(a,b){ return LINE_CACHE[a].ts - LINE_CACHE[b].ts; })
       .slice(0, ks.length-40).forEach(function(k){ delete LINE_CACHE[k]; });
   }
-}
-
-/* 收藏按钮 UI（新样式：顶部栏 ctlbtn） */
-function setFavBtnUI(){
-  var b=$("btnFav");
-  var on=isFav(cur.tid,cur.id);
-  b.className="ctlbtn"+(on?" act":"");
-  b.querySelector(".ic").textContent=on?"★":"☆";
-  b.querySelector(".lb").textContent=on?"已收藏":"收藏";
 }
 
 /* ---------- 线路智能测速选优 ----------
@@ -1708,12 +1692,10 @@ function playWebLine(url, i){
        的黑底会把官方页整个挡住（实测全黑、页面其实正常在播）。
        开官方页前必须重新转透明。 */
     setFrameOn();
-    $("webmask").classList.add("show");
-    /* ★ v2.10.8：状态页统一接管加载期视觉（z500 盖住 webmask）——
-       频道号 + 频道名 + 渐进状态行，黑底无转圈海报。webmask 留着是
-       桌面端/无原生页环境的兜底，安卓端永远被 status 盖在上面。 */
+    /* ★ v2.10.39：webmask 不再参与了 —— status 统一接管加载期视觉，
+       且 setFrameOn 后 status 透明底盖不住 webmask（双层文案重叠，见 setStatus）。
+       webmask 结构留着作无原生页环境的兜底，但安卓加载链路不再点亮它。 */
     setStatus("正在打开官方直播页…（第"+(i+1)+"条线路）", true);
-    $("webmaskTxt").textContent = "正在打开官方直播页…（第"+(i+1)+"条线路）";
     preconnOtherLines(url);                  /* ★ 顺带把其余线路的域名握手暖上 */
     try{ NativeTV.openPage(url, JSON.stringify(ad), extra); }
     catch(e){
@@ -1942,9 +1924,8 @@ window.__onWebPageFailed = function(reason){
   if(cur.idx+1 < cur.urls.length){
     webState = 2;
     toast("第"+(cur.idx+1)+"条线路无法播放"+why+"，自动切换", {type:"warn"});
-    $("webmask").classList.add("show");
+    /* v2.10.39：webmask 不再点亮（见 playWebLine），换线视觉由 status 接管 */
     setStatus(reason ? "这条线路不支持：换下一条…" : "正在尝试第"+(cur.idx+2)+"条线路…", true);
-    $("webmaskTxt").textContent = reason ? reason+"，换下一条…" : "正在尝试第"+(cur.idx+2)+"条线路…";
     playIdx(cur.idx+1);            /* 复用同一个 WebView 换地址，不拆页面 */
   } else {
     webState = 3;
@@ -2604,7 +2585,7 @@ function renderSetPanel(){
   opt(pbBox, (TUNE !== "stable") ? "⚡ 秒开 → 点切「稳定」" : "🛡 稳定 → 点切「秒开」", false,
       function(){ setTune(TUNE === "fast" ? "stable" : "fast"); });
   opt(pbBox, isFav(cur.tid,cur.id) ? "★ 取消收藏" : "☆ 收藏当前频道", isFav(cur.tid,cur.id),
-      function(){ toggleFav(cur.tid,cur.id,cur.name); setFavBtnUI(); });
+      function(){ toggleFav(cur.tid,cur.id,cur.name); renderSetPanel(); });
   opt(pbBox, "📺 节目单", false, function(){
     closeAllOv(); closeLinePanel(); renderEpg(); $("epg").classList.add("show");
   });
@@ -2671,7 +2652,6 @@ function autoStartFirst(){
 function init(){
   if(IS_TV) document.body.classList.add("tv");
   /* v2.10.6：旧列表页删除 —— 启动即全屏播放；源切换/换台全在 chOv 浮层 */
-  $("btnFav").onclick=function(){ toggleFav(cur.tid,cur.id,cur.name); setFavBtnUI(); };
 
   /* v2.10.38：单击唤浮层（左=频道列表 / 右=设置）—— 收归网页层，同步判定 */
   bindTapToOpen();
