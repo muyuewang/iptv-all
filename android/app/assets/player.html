@@ -2194,9 +2194,24 @@ function bindTapToOpen(){
       var now = Date.now();
       var left = (isFinite(e.clientX) ? e.clientX : 0) * 2 < window.innerWidth;
       var want = left ? "ch" : "set";
-      /* 连点保护：刚关过浮层，且这一击想重开**同一个** → 吞掉（固定时点、只读、不续期） */
-      if(now - (__ovClosedAt||0) < OV_QUIET &&
+      var sinceClose = now - (__ovClosedAt||0);
+      /* 连点保护分两档（v2.10.41）：
+         · 同一侧（想重开刚关掉的那个）：OV_QUIET 700ms —— 停手不到 0.7s 说明不是新意图；
+         · 另一侧：只挡 **同一次手势**（OV_GUARD 320ms，与「刚打开防自关」同一把尺子）——
+           手指双击（实测 150ms）不会把另一侧浮层叫出来，而用户「点空白关掉设置 →
+           再看一眼 → 点左边开列表」这种刻意操作（实测 ≥400ms）第一下就生效。
+         两档都只读 __ovClosedAt/__ovClosedWhich，被吞的点击不写任何状态（旧版滑动串
+         会自我延续 → 连点越点越不出，见 git 历史 v2.10.38 注释与探针实测）。 */
+      if(sinceClose < OV_QUIET &&
          (__ovClosedWhich === "both" || __ovClosedWhich === want)) return;
+      if(sinceClose < OV_GUARD && __ovClosedWhich && __ovClosedWhich !== want) return;
+      /* ★ v2.10.41 级联防误触：刚被「点空白」关掉一个浮层（<OV_QUIET），紧接着这一击又
+         开出了**另一侧**浮层 —— 手指多半还没停、浮层是「啪」一下冒到手指底下的。
+         此时给新浮层挂 OV_ITEM_GUARD 的条目闸门，避免下一击正好落在 .chi 上就换了台
+         （v2.10.36 老用例「点多了换台」；条目闸门见 ovItemGuard）。 */
+      window.__ovItemGuardUntil =
+          (sinceClose < OV_QUIET && __ovClosedWhich && __ovClosedWhich !== want)
+              ? now + OV_ITEM_GUARD : 0;
       if(left) openChOv(); else openSetOv();
     }catch(err){}
   });
@@ -2378,6 +2393,9 @@ var __ovClosedWhich = "";
    而正常「关掉浮层 → 看一眼 → 再开另一个」的手感间隔都在 1s 以上，700ms 只吃
    连点，不误伤正常操作。 */
 var OV_QUIET = 700;
+/** 被「连点顺手开出」的浮层，其条目多久内不吃点击（防误换台，见 ovItemGuard）。
+    取 1200 与旧 BURST_GAP 同值：真人「手指这一串」的间隔上限。 */
+var OV_ITEM_GUARD = 1200;
 /** 浮层刚打开时刻起的防误关窗（见 ovClickClose） */
 var OV_GUARD = 320;
 var __ovGuardUntil = 0;
@@ -2413,6 +2431,19 @@ function ovClickClose(e){
   closeAllOv();
 }
 try{ $("chOv").addEventListener("click", ovClickClose); $("setOv").addEventListener("click", ovClickClose); }catch(e){}
+
+/* ★ v2.10.41 条目闸门：浮层是「被一次点空白的连点顺手开出来」时（见 bindTapToOpen），
+   在 OV_ITEM_GUARD 内把条目点击整个吃掉（捕获阶段 stopPropagation，条目自己的
+   onclick 不会跑）——防「手指没停 → 正好点中 .chi → 莫名换台」。正常打开的浮层不受影响。 */
+function ovItemGuard(e){
+  if(Date.now() >= (window.__ovItemGuardUntil||0)) return;
+  var t = e.target;
+  if(t && t.closest && t.closest(".chi,.cat,.opt,.sec,.sopt,.line-item")){
+    try{ e.stopPropagation(); e.preventDefault(); }catch(_){}
+  }
+}
+try{ $("chOv").addEventListener("click", ovItemGuard, true);
+     $("setOv").addEventListener("click", ovItemGuard, true); }catch(e){}
 
 /* ---------- v2.10.9 原生单击唤浮层的落点判定 ----------
    原生 dispatchTouchEvent 短按抬起时问这里：「这一点会不会点在可交互 UI 上？」
