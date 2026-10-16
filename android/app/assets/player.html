@@ -2169,28 +2169,34 @@ function inCtrl(t){ return t && t.closest && (t.closest("#ctrl")||t.closest(".ct
 function inOv(t){ return t && t.closest && (t.closest(".ov")); }
 
 function bindTapToOpen(){
-  /* 连击序列（v2.10.36 语义的网页轻量版）：间隔 < BURST_GAP 的连续点击算「手指这一串」，
-     串里只要点中过自有 UI / 关过浮层，剩下的点击一律不再开新浮层 —— 手指没停说明
-     用户没打算开新的。★ 与原生静默窗的本质区别：被抑制的点击**不刷新任何时间戳**，
-     序列只在「间隔超限」时结束 —— 不会出现「每吃一击续 700ms」的自我延续。
-     BURST_GAP 取 1200：真实手指连击间隔 300~500ms，但 click 派发受系统调度 +
-     adb input tap 开销（探针实测单次 ~430ms）影响，800 会漏。 */
-  var BURST_GAP = 1200, lastT = 0, muted = false;
+  /* ★ v2.10.41 重构（探针 tools/_probe_tapopen.py 复现后定案）：
+     旧版沿用了「连击串 muted + BURST_GAP=1200 滑动窗」—— 但它有两个致命缺陷：
+       1) `lastT = now` 写在一切判断之前 → **被吞掉的点击也在刷新串的时间戳**，
+          于是用户「点一下没反应 → 再点一下」的节奏（间隔 < 1200ms）会让串永不完结：
+          实测连点 4 下全被吞，停手 2s 才恢复 —— 就是用户说的「得点第二次 / 有时候也出不来」。
+          （注释自称「被抑制的点击不刷新时间戳」，实现与声明相反。）
+       2) 关浮层的那一击把**整串**标记为 muted → 关掉设置后 1.2s 内点另一侧也开不了列表
+          —— 正是用户主诉「先开设置、点空白关掉、再点左边第一次出不来」。
+     现在改为「固定时点 + 按浮层区分」：
+       · 关闭时刻 __ovClosedAt 是**只读时点**，OV_QUIET 过后自动失效，任何点击都不刷新它；
+       · 只吞「立刻重开**刚刚关掉的那个**浮层」——关设置后点左边开列表 = 新意图，立刻生效；
+       · 关浮层的那一击自身绝不再开浮层（事件上打标记，见 ovClickClose）；
+       · 点自有 UI（顶栏/浮层/确认卡）不再污染后续点击。 */
   document.addEventListener("click", function(e){
     try{
-      var now = Date.now();
-      if(now - lastT >= BURST_GAP) muted = false;    /* 停手够久 → 新的一串 */
-      lastT = now;
       if(!$("player").classList.contains("show")) return;
+      /* 这一击已经用来关浮层了（ovClickClose 在冒泡更深处先跑）→ 不再开新浮层 */
+      if(e.__ovClosedByMe) return;
       var t=e.target;
-      /* 自有 UI 自己处理：顶栏(收藏)、浮层、确认卡、toast 按钮不参与唤浮层；
-         且这一串视为「在与 UI 互动」，不再开新浮层 */
-      if(t.closest && t.closest("#ctrl,.ov,#errCard,#toasts")){ muted = true; return; }
+      /* 自有 UI 自己处理：顶栏(收藏)、浮层、确认卡、toast 按钮不参与唤浮层 */
+      if(t.closest && t.closest("#ctrl,.ov,#errCard,#toasts")) return;
       if(anyOvOpen()) return;      /* 浮层铺满全屏，点击都落在它身上（ovClickClose 负责关） */
-      if(muted) return;
-      /* 刚关浮层的连点保护：__ovClosedAt 是固定时点，这里只读不写 */
-      if(now - (__ovClosedAt||0) < OV_QUIET){ muted = true; return; }
+      var now = Date.now();
       var left = (isFinite(e.clientX) ? e.clientX : 0) * 2 < window.innerWidth;
+      var want = left ? "ch" : "set";
+      /* 连点保护：刚关过浮层，且这一击想重开**同一个** → 吞掉（固定时点、只读、不续期） */
+      if(now - (__ovClosedAt||0) < OV_QUIET &&
+         (__ovClosedWhich === "both" || __ovClosedWhich === want)) return;
       if(left) openChOv(); else openSetOv();
     }catch(err){}
   });
@@ -2350,17 +2356,22 @@ function anyOvOpen(){ return ovOpen("ch") || ovOpen("set"); }
 function closeChOv(){ $("chOv").classList.remove("show"); }
 function closeSetOv(){ $("setOv").classList.remove("show"); }
 function closeAllOv(){
-  var was = anyOvOpen();
+  var wasCh = ovOpen("ch"), wasSet = ovOpen("set");
   clearTimeout(__ovAutoT); __ovAutoT=null;
   closeChOv(); closeSetOv();
-  /* ★ 记下「刚关过」的时刻：连点的第二下若落在 700ms 内，bindTapToOpen 会
-     读这个固定时点把它忽略（点空白关浮层 → 立刻再点 ≠ 想开列表）。
-     ★ v2.10.38：这里是**固定时点、只读不写** —— 原生静默窗时代「每吃一击
-     就续 700ms」的自我延续问题在网页层不存在（被吃的点击不会再刷新它）。 */
-  if(was){ __ovClosedAt = Date.now(); }
+  /* ★ 记下「刚关过」的时点与**关掉的是哪一个**（v2.10.41）：
+     连点保护只针对「立刻重开刚关掉的那个浮层」，另一侧不受影响。
+     ★ 这里是**固定时点、只读不写** —— 被吞的点击不刷新它，抑制窗严格在
+     OV_QUIET 后失效（旧版滑动串会自我延续，见 bindTapToOpen 注释）。 */
+  if(wasCh || wasSet){
+    __ovClosedAt = Date.now();
+    __ovClosedWhich = (wasCh && wasSet) ? "both" : (wasCh ? "ch" : "set");
+  }
 }
 /** 浮层刚关闭时刻；OV_QUIET 内 bindTapToOpen 不再唤浮层（连点保护） */
 var __ovClosedAt = 0;
+/** 刚关掉的是哪一个浮层："ch" | "set" | "both" | ""（见 closeAllOv） */
+var __ovClosedWhich = "";
 /* ★ 700ms 不是随手取的：真人「点一下没反应 → 再点一下」的间隔实测在 400~700ms
    （tools/_probe_ovtap.py 里两下 input tap 相隔 449ms，人手只会更慢）。早先按
    300ms（对齐双击阈值）定，实测拦不住 —— 第二下照样把频道列表叫出来。
@@ -2395,6 +2406,10 @@ window.__overlayBack = function(){
 function ovClickClose(e){
   if(Date.now() < (window.__ovGuardUntil||0)) return;
   if(e.target.closest && (e.target.closest(".chi") || e.target.closest(".cat") || e.target.closest(".opt") || e.target.closest(".sec") || e.target.closest(".sopt"))) return;
+  /* ★ v2.10.41：在事件上打标记 —— 这一击已经用来关浮层，document 上的
+     bindTapToOpen 随后收到同一个事件时会看到标记直接放行（否则「点空白关掉设置」
+     这一击会顺手把列表也开出来：关浮层的瞬间 anyOvOpen() 已为假）。 */
+  try{ e.__ovClosedByMe = true; }catch(_){}
   closeAllOv();
 }
 try{ $("chOv").addEventListener("click", ovClickClose); $("setOv").addEventListener("click", ovClickClose); }catch(e){}
