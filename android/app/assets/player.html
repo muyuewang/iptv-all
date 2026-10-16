@@ -108,6 +108,8 @@
   #player.fs #ctrl{position:absolute;left:0;right:0;top:0;bottom:0;z-index:2;border-top:none;
     background:transparent;pointer-events:none;}
   /* fs/tv 模式 #ctrl 整体 pointer-events:none —— 面板类子元素要单独放开 */
+  /* ★ v2.10.42：#linePanel/#epg 已搬到 body 层（自带 pointer-events:auto），
+     下面这条只对还留在 #ctrl 里的元素有意义，保留兼容旧引擎。 */
   #player.fs #linePanel, #player.fs #epg, body.tv #linePanel, body.tv #epg{pointer-events:auto;}
   #player.fs #epg{max-height:44vh;}
 
@@ -147,7 +149,9 @@
   body.native-on #vwrap{visibility:hidden;}
 
   /* 线路选择弹层（电视家风格：底部滑出面板） */
-  #linePanel{position:absolute;left:0;right:0;bottom:0;z-index:4;
+  /* ★ v2.10.42：面板类 UI 住 body 层、position:fixed、z 介于状态页(600)与浮层(700)之间。
+     原来是 #player(z50) 里的 absolute z4 —— 会被加载状态页(600, 不透明整屏)盖住。 */
+  #linePanel{position:fixed;left:0;right:0;bottom:0;z-index:640;pointer-events:auto;
     background:rgba(12,13,18,.96);-webkit-backdrop-filter:blur(20px) saturate(160%);
     backdrop-filter:blur(20px) saturate(160%);border-top:1px solid var(--line-strong);
     border-radius:16px 16px 0 0;padding:14px 16px 18px;display:none;
@@ -164,8 +168,10 @@
   #linePanel .line-item.on .lb{color:#fff;font-weight:600;}
 
   /* EPG 节目单（电视家风格：右侧滑出或底部弹出，此处底部弹出） */
-  #epg{display:none;overflow:auto;max-height:46vh;position:absolute;left:0;right:0;bottom:0;
-    z-index:4;background:rgba(12,13,18,.96);-webkit-backdrop-filter:blur(20px) saturate(160%);
+  /* ★ v2.10.42：同 #linePanel —— body 层 + fixed + z645（>status 600、<浮层 700） */
+  #epg{display:none;overflow:auto;max-height:46vh;position:fixed;left:0;right:0;bottom:0;
+    z-index:645;pointer-events:auto;background:rgba(12,13,18,.96);
+    -webkit-backdrop-filter:blur(20px) saturate(160%);
     backdrop-filter:blur(20px) saturate(160%);border-top:1px solid var(--line-strong);
     border-radius:16px 16px 0 0;padding:6px 0 12px;}
   #epg.show{display:block;}
@@ -249,6 +255,11 @@
   body.tv .tst{font-size:18px;padding:14px 24px;border-radius:18px;}
 
   /* 播放失败占位卡（替代一行冷文字）：图标 + 原因 + 可操作按钮 */
+  /* ★ v2.10.42 确认卡遮罩：z 只比卡片(750)低一档、比浮层(700)高 —— 挡住点击穿透，
+     但视觉上仍是「卡片浮在暗底上」。 */
+  #cardMask{position:fixed;left:0;top:0;right:0;bottom:0;z-index:740;display:none;
+    background:rgba(0,0,0,.42);}
+  #cardMask.show{display:block;}
   #errCard{position:fixed;left:50%;top:50%;z-index:750;width:86%;width:min(360px,86%);
     transform:translate(-50%,-50%);background:rgba(18,20,26,.96);
     -webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);
@@ -442,21 +453,34 @@
   <div id="ctrl">
     <!-- v2.10.38：底部控制条（节目单/线路/秒开/暂停/比例/全屏）整体删除，
          功能入口全部迁入设置浮层（renderSetPanel「播放控制」区）。
-         v2.10.39：顶栏（频道名+收藏）也删了 —— 直播流自带台标，收藏在设置浮层。 -->
-    <!-- 线路选择弹层 -->
-    <div id="linePanel">
-      <div class="ttl">选择线路</div>
-      <div class="grid" id="lineGrid"></div>
-    </div>
-    <!-- 节目单 -->
-    <div id="epg"></div>
+         v2.10.39：顶栏（频道名+收藏）也删了 —— 直播流自带台标，收藏在设置浮层。
+         ★ v2.10.42：#linePanel / #epg 从这里**搬到 body 层** —— 见下方定义处的说明。 -->
   </div>
   <div id="gestureInd"><span class="ic" id="gIcon">🔆</span><span class="val" id="gVal">50%</span><div class="bar"><i id="gBar"></i></div></div>
 </div>
+
+<!-- ★ v2.10.42 层栈契约（实拍定案，详见 分层职责与生命周期.md「边界 E」）：
+     #linePanel / #epg 原本住在 #player（z50）里，而加载状态页 #status 是 body 层的
+     **不透明整屏**（z600）。于是「换台/加载中 → 点设置 → 切换线路」这条路上，面板
+     被状态页整个盖住：用户屏幕上什么都看不到（实测面板区域亮度差 Δ=0），但
+     #status 是 pointer-events:none —— 点击照样穿透到看不见的面板条目上，盲点就换线。
+     规则：**任何“要盖住加载状态页”的 UI 必须住在 body 层**，因此把这两个面板挪出来，
+     并纳入统一 z 区间（状态页 600 < 面板 640/645 < 浮层 700）。 -->
+<div id="linePanel">
+  <div class="ttl">选择线路</div>
+  <div class="grid" id="lineGrid"></div>
+</div>
+<!-- 节目单 -->
+<div id="epg"></div>
 <!-- ★ v2.10.13：浮层/失败卡移出 #player 到 body 层 —— #player 是 z50 的层叠上下文，
      里面的 z700 压不过 body 层的状态页 #status(z600)（v2.10.8 状态页挪 body 层时
      同款坑的复发）：加载中唤出浮层被状态页整层盖住，用户看到「点击无反应」，
      等起播 hideStatus 才露出来。挪到 body 层后 z700/750 才真正生效。 -->
+<!-- ★ v2.10.42：确认卡遮罩 —— 卡片是居中小框，没有遮罩时点卡片外的空白会**穿透**
+     到下面的 #player，把频道列表/设置浮层开在卡片背后（探针 4 轮稳定复现：
+     card=True 且 ch=True）。遮罩只负责挡住穿透，不抢焦点（点遮罩=什么都不做，
+     避免误关掉失败卡；想关就点卡片上的按钮，或按 BACK —— 见 __tvBack）。 -->
+<div id="cardMask"></div>
 <!-- 播放失败占位卡：图标 + 原因 + 可操作按钮（替代过去的一行冷文字） -->
 <div id="errCard">
   <div class="eic" id="ecIc">⚠️</div>
@@ -626,11 +650,17 @@ function showErrCard(o){
     }, 1000);
   } else { rt.style.display = "none"; rt.textContent = ""; }
   $("errCard").classList.add("show");
+  try{ $("cardMask").classList.add("show"); }catch(e){}      /* ★ v2.10.42 遮罩：挡点击穿透 */
 }
 function hideErrCard(){
   clearInterval(__errCountdown); __errCountdown = null;
   var c = $("errCard"); if(c) c.classList.remove("show");
+  try{ $("cardMask").classList.remove("show"); }catch(e){}
 }
+/* 遮罩点击：只吞掉事件（不关卡片）—— 失败卡/退出卡都要用户明确点按钮或按 BACK */
+try{ $("cardMask").addEventListener("click", function(e){
+  try{ e.stopPropagation(); e.preventDefault(); }catch(_){}
+}); }catch(e){}
 
 /* 播放层状态页（v2.10.8）：黑底整屏「频道号 + 频道名 + 渐进状态行」。
    首帧出来后 hideStatus() 淡出（.45s），不再瞬间跳变。
@@ -2405,6 +2435,22 @@ function ovAutoKeep(){
   clearTimeout(__ovAutoT);
   if(anyOvOpen()) __ovAutoT=setTimeout(closeAllOv, 12000);
 }
+/* ★ v2.10.42：滚动/触摸也要续期 —— 原来只认「条目点击 + 按键」，于是用户正在
+   滚动长列表时 12s 一到就被自动关掉（探针实测：滚动中列表被关）。节流 800ms，
+   避免 touchmove 每帧都重置定时器。 */
+var __ovKeepT = 0;
+function ovAutoKeepSoft(){
+  var now = Date.now();
+  if(now - __ovKeepT < 800) return;
+  __ovKeepT = now;
+  if(anyOvOpen()) ovAutoKeep();
+}
+try{
+  ["wheel","touchstart","touchmove"].forEach(function(ev){
+    $("chOv").addEventListener(ev, ovAutoKeepSoft, {passive:true});
+    $("setOv").addEventListener(ev, ovAutoKeepSoft, {passive:true});
+  });
+}catch(e){}
 
 /* BACK 优先级（由 MainActivity 的注入 JS 调用）：返回 '1' 表示已消费 */
 window.__overlayBack = function(){
@@ -2455,6 +2501,10 @@ try{ $("chOv").addEventListener("click", ovItemGuard, true);
    返回 '1' 表示已消费（浮层关闭 / 确认卡已弹）。 */
 window.__tvBack = function(){
   if(anyOvOpen()){ closeAllOv(); return "1"; }
+  /* ★ v2.10.42：卡片（失败卡/退出确认卡）开着时 BACK = 关掉它。
+     旧版这里直接往下走「弹退出确认卡」，导致卡片上按 BACK 只是把卡片重画一次
+     （探针实测 card True→True），用户以为 BACK 失效。 */
+  if($("errCard").classList.contains("show")){ hideErrCard(); return "1"; }
   if($("player").classList.contains("show")){
     showErrCard({ title:"确定退出纯净电视？", desc:"退出后将停止播放",
       btns:[{label:"退 出", primary:true, fn:function(){ try{ NativeTV.exitApp(); }catch(e){} }},
@@ -2783,8 +2833,37 @@ function init(){
   }
   var OK=[23,13,66,160];
   var CHUP=[33,166], CHDN=[34,167];      /* 遥控器 频道+ / 频道- */
+  /* ★ v2.10.42：OK 键与「数字键」键码空间重叠 —— DOM keyCode 13（Enter/DPAD_CENTER）
+     正落在 Android 数字键区间 7..16 里（13 = Android KEYCODE_6）。旧代码的数字分支
+     写在最前面，于是**遥控器按 OK 被当成「数字 6」**：既不唤频道列表（分支 return 了），
+     还在 1.2s 后跳到第 6 个频道（探针实拍时间线：KEYDOWN k=13 → 1.2s 后 closeAllOv+换台）。
+     现在用 e.key 消歧：e.key 是单个数字 → 数字键；是 Enter/Space/未识别 → OK。
+     两套键码都保留（DOM 数字 '0'-'9'=48-57、Android 数字=7..16）。 */
+  /** 焦点是否落在「自家可交互 UI」上（顶栏/面板/节目单/浮层/确认卡）。
+    ★ v2.10.42：#linePanel/#epg 搬到 body 层后不再是 #ctrl 的后代 ——
+      原来只判 #ctrl 的两处守卫会把面板里的焦点误判成「无焦点」，
+      导致面板开着时按 OK 变成「开频道列表」、按上下键变成「换台」。 */
+function uiFocus(ae){
+  return !!(ae && ae.closest && (ae.closest("#ctrl") || ae.closest("#linePanel") ||
+                                 ae.closest("#epg") || ae.closest(".ov") ||
+                                 ae.closest("#errCard")));
+}
+function isOkKey(e){
+    var k=e.keyCode;
+    if(k===23 || k===66 || k===160) return true;           /* DPAD_CENTER / ENTER / NUMPAD_ENTER */
+    if(k!==13) return false;
+    return !(/^[0-9]$/.test(e.key||""));                   /* 13 + e.key 是数字 = 真数字键 6 */
+  }
+  function isDigitKey(e, ok){
+    var k=e.keyCode;
+    if(ok) return false;
+    if(k>=48 && k<=57) return true;                        /* DOM '0'..'9' */
+    if(k>=7 && k<=16 && !(k===13)) return true;            /* Android 数字键（13 交给 isOkKey 判定） */
+    return false;
+  }
   document.addEventListener("keydown", function(e){
     var k=e.keyCode, ae=document.activeElement, inPlayer=$("player").classList.contains("show");
+    var _ok = isOkKey(e), _dig = isDigitKey(e, _ok);
 
     /* ---- 遥控器数字键直选频道（0-9，TV 版）----
        输入数字后 1.2 秒内无后续数字 → 跳到该序号频道。
@@ -2802,13 +2881,11 @@ function init(){
       if(nc) openChannel(nc.tid||curCat, nc.id, nc.name);
     }
     /* ★ v2.10.13：数字选台随时可用（原来被 (!inPlayer||anyOvOpen) 包住 ——
-       播放中无浮层按遥控器数字键没反应，TV 用户实测反馈） */
+       播放中无浮层按遥控器数字键没反应，TV 用户实测反馈）
+       ★ v2.10.42：守卫换成 isDigitKey —— OK/确认键不再掉进这里（见上面的说明）。 */
     if(!(ae && ae.tagName==="INPUT")){
-      if(k>=7 && k<=16 || (k>=48 && k<=57)){  /* KEYCODE_0..9 数字选台 */
+      if(_dig){  /* 数字键直选频道 */
         e.preventDefault();
-        /* ★ v2.10.13：DOM keyCode 与 Android keycode 两套并存 —— WebView 把
-           主键盘数字翻成 DOM 标准（'1'=49…'9'=57,'0'=48），只认 7..16 时
-           永远匹配不上（实测播放中按「1」无反应）。两套都收。 */
         var digit = (k>=48) ? ((k===48) ? 0 : k-48) : (k-7);
         numBuf = (numBuf + digit).slice(-3);
         clearTimeout(numTimer);
@@ -2837,7 +2914,7 @@ function init(){
     }
     /* ---- 播放中（浮层未开）：频道+/- 与 DPAD 上下切台，首尾循环 ---- */
     if(inPlayer && !anyOvOpen() && (CHUP.indexOf(k)>=0 || CHDN.indexOf(k)>=0 || k===38 || k===40)){
-      var ctlF = ae && ae.closest && ae.closest("#ctrl");
+      var ctlF = uiFocus(ae);
       if(!ctlF){
         e.preventDefault();
         hopChan(CHUP.indexOf(k)>=0 || k===40 ? 1 : -1);
@@ -2849,7 +2926,7 @@ function init(){
     if(inPlayer && anyOvOpen()){
       e.preventDefault();
       ovAutoKeep();      /* 有操作就重置 12s 自动关闭计时 */
-      if(OK.indexOf(k)>=0){ if(ae && typeof ae.click==="function" && ae.tagName!=="INPUT") ae.click(); return; }
+      if(_ok){ if(ae && typeof ae.click==="function" && ae.tagName!=="INPUT") ae.click(); return; }
       if(k===38 || k===40){
         var ovCont = ae && ae.closest && (ae.closest(".cats")||ae.closest(".chs")||ae.closest(".panel"));
         if(!ovCont){
@@ -2875,15 +2952,14 @@ function init(){
     }
     /* ---- v2.10 播放中（TV）：菜单键=设置浮层；OK=频道列表浮层（控制条无焦点时） ---- */
     if(inPlayer && k===82){ e.preventDefault(); openSetOv(); return; }
-    if(inPlayer && OK.indexOf(k)>=0){
-      var ctlFocus = ae && ae.closest && ae.closest("#ctrl");
-      if(!ctlFocus){ e.preventDefault(); openChOv(); return; }
+    if(inPlayer && _ok){
+      if(!uiFocus(ae)){ e.preventDefault(); openChOv(); return; }
     }
 
     if(inPlayer){
       /* v2.10.38：控制条已删。焦点只可能落在顶栏收藏 / linePanel / epg ——
          OK = 点击；面板开着时方向键在面板条目间移动 */
-      if(OK.indexOf(k)>=0){ if(ae&&typeof ae.click==="function"&&ae.tagName!=="INPUT"){ ae.click(); e.preventDefault(); } return; }
+      if(_ok){ if(ae&&typeof ae.click==="function"&&ae.tagName!=="INPUT"){ ae.click(); e.preventDefault(); } return; }
       var panel = ae && ae.closest && ae.closest("#linePanel");
       if(panel && (k===37||k===38||k===39||k===40)){
         e.preventDefault();
