@@ -664,6 +664,20 @@ function showErrCard(o){
   } else { rt.style.display = "none"; rt.textContent = ""; }
   $("errCard").classList.add("show");
   try{ $("cardMask").classList.add("show"); }catch(e){}      /* ★ v2.10.42 遮罩：挡点击穿透 */
+  /* ★ v2.10.43（用户要求）：TV 遥控器必须能在「退出 / 继续观看」之间选。
+     ★ 顺序要紧：**先 show 再 focus** —— 元素还在 display:none 时 focus() 会静默失败
+     （实测 activeElement 仍是 BODY，遥控器按 OK 什么都不会发生）。
+     默认焦点给非 primary 那个（退出卡上就是"继续观看"），更安全；全是 primary 时给第一个。
+     方向键在按钮间移动见 keydown 的卡片分支。 */
+  if(IS_TV){
+    try{
+      var bs = box.querySelectorAll("button");
+      var pick = null;
+      for(var i=0;i<bs.length;i++){ if(bs[i].className.indexOf("s")>=0){ pick=bs[i]; break; } }
+      if(!pick && bs.length) pick = bs[0];
+      if(pick){ pick.tabIndex=0; pick.focus(); }
+    }catch(e){}
+  }
 }
 function hideErrCard(){
   clearInterval(__errCountdown); __errCountdown = null;
@@ -2288,6 +2302,8 @@ function bindTouchGestures(){
     touchState.x=e.touches[0].clientX; touchState.y=e.touches[0].clientY;
     touchState.mode=null; touchState.moved=false;
     touchState.startX=touchState.x; touchState.startY=touchState.y;
+    touchState.startBright=brightLevel;      /* ★ v2.10.43 手势按目标值换算，不再累加 */
+    touchState.startVol=volLevel;
   });
   wrap.addEventListener("touchmove", function(e){
     if(e.touches.length!==1 || !touchState.startX) return;
@@ -2300,8 +2316,11 @@ function bindTouchGestures(){
       }
     }
     touchState.moved = true;
-    if(touchState.mode==="bright") adjustBrightness(-dy/200);
-    else if(touchState.mode==="vol") adjustVolume(-dy/200);
+    /* ★ v2.10.43：整屏高度 ×0.8 对应满量程（0→100%），线性、可预期；
+       死区 14px 见上面的 mode 判定，微动手不会误调。 */
+    var span = Math.max(60, window.innerHeight * 0.8);
+    if(touchState.mode==="bright") setBrightness((touchState.startBright||0.5) - dy/span);
+    else if(touchState.mode==="vol") setVolume((touchState.startVol||0.5) - dy/span);
     e.preventDefault();
   });
   wrap.addEventListener("touchend", function(){
@@ -2312,16 +2331,23 @@ function bindTouchGestures(){
 
 /* 亮度/音量手势：调系统亮度（需原生桥）或音量 */
 var brightLevel = 0.5, volLevel = 0.5;
-function adjustBrightness(delta){
-  brightLevel = Math.max(0.05, Math.min(1, brightLevel + delta));
+/* ★ v2.10.43：手势改成「目标值」语义 —— 旧版 adjustBrightness(-dy/200) 里 dy 是
+   **相对起点的累计位移**（touchmove 每次都给累计值），却被当成增量反复叠加：
+   总效果是位移的平方（二次加速），轻轻一滑就串到最亮/最暗。用户反馈就是这个。
+   现在：touchstart 记下起始亮度/音量，move 时按「总位移 / (屏高×0.8)」线性换算目标值。 */
+function setBrightness(v){
+  brightLevel = Math.max(0.05, Math.min(1, v));
   try{ if(window.NativeTV && NativeTV.setBrightness) NativeTV.setBrightness(brightLevel); }catch(e){}
   showGestureInd("🔆", Math.round(brightLevel*100)+"%", brightLevel);
 }
-function adjustVolume(delta){
-  volLevel = Math.max(0, Math.min(1, volLevel + delta));
+function setVolume(v){
+  volLevel = Math.max(0, Math.min(1, v));
   try{ if(window.NativeTV && NativeTV.setVolume) NativeTV.setVolume(volLevel); }catch(e){}
   showGestureInd("🔊", Math.round(volLevel*100)+"%", volLevel);
 }
+/* 兼容旧调用点：语义仍是「相对当前值增减」 */
+function adjustBrightness(delta){ setBrightness(brightLevel + delta); }
+function adjustVolume(delta){ setVolume(volLevel + delta); }
 function showGestureInd(icon, val, frac){
   $("gIcon").textContent=icon; $("gVal").textContent=val;
   $("gBar").style.width=Math.round(frac*100)+"%";
@@ -2669,8 +2695,34 @@ function renderChOvSrc(){
 }
 function openChOv(){
   if(ovOpen("ch")) return;                /* 已开着（原生手势/TV键会重复触发） */
+  /* ★ v2.10.43：卡片（失败卡/退出确认卡）在场时不开浮层 —— 卡片是模态，
+     点击/按键都该归它（含 TV 遥控器 MENU 那条原生链路）。 */
+  if($("errCard") && $("errCard").classList.contains("show")) return;
   CHOV.src = (srcMode==="wvt" && WVT.ready) ? "wvt" : "local";
   CHOV.group = (CHOV.src==="wvt") ? WVT.cur : curCat;
+  /* ★ v2.10.43（用户要求）：列表要**定位到正在播的那个频道** ——
+     不只是把条目滚进可视区，还得先把分组切到"这个频道所在的分组"。
+     旧版只认 WVT.cur / curCat（上次浏览过的分组），当前频道在别的分组时，
+     列表里根本看不到高亮，用户以为没定位。 */
+  try{
+    var curTid=(cur && cur.tid) || "";
+    if(curTid==="wvt" && WVT.ready){
+      CHOV.src="wvt";
+      var hit="";
+      for(var gi=0; gi<WVT.groups.length; gi++){
+        var gname=WVT.groups[gi], ids=WVT.byGroup[gname] || [];
+        for(var z=0; z<ids.length; z++){
+          if(String(ids[z])===String(cur.id)){ hit=gname; break; }
+        }
+        if(hit) break;
+      }
+      CHOV.group = hit || WVT.cur;
+    } else if(curTid){
+      /* 本机源频道：分组就是它的分类 key（收藏另算） */
+      CHOV.src="local";
+      CHOV.group = (curTid==="fav") ? "fav" : curTid;
+    }
+  }catch(e){}
   closeSetOv();
   $("chOv").classList.add("show");
   __ovGuardUntil = Date.now() + OV_GUARD;   /* 见 ovClickClose 注释 */
@@ -2681,6 +2733,7 @@ function openChOv(){
 /* ---------- 设置浮层：右侧面板（源/比例/信息/时钟/网速） ---------- */
 function openSetOv(){
   if(ovOpen("set")) return;
+  if($("errCard") && $("errCard").classList.contains("show")) return;   /* 同上：卡片模态优先 */
   closeChOv();
   renderSetPanel();
   $("setOv").classList.add("show");
@@ -2934,6 +2987,23 @@ function isOkKey(e){
   document.addEventListener("keydown", function(e){
     var k=e.keyCode, ae=document.activeElement, inPlayer=$("player").classList.contains("show");
     var _ok = isOkKey(e), _dig = isDigitKey(e, _ok);
+
+    /* ---- ★ v2.10.43 卡片（退出确认 / 失败卡）在场：按键全部归卡片 ----
+       OK=点焦点按钮；左右上下/Tab=在按钮间移动；BACK 由原生 doBack→__tvBack 关卡片。 */
+    if($("errCard") && $("errCard").classList.contains("show")){
+      e.preventDefault();
+      if(_ok){ if(ae && typeof ae.click==="function" && ae.tagName!=="INPUT") ae.click(); return; }
+      if(k===37||k===38||k===39||k===40||k===9){
+        var bs=[].slice.call(document.querySelectorAll("#ecBtns button"));
+        if(bs.length){
+          var bi=bs.indexOf(ae);
+          var nd=(k===37||k===38) ? (bi<=0 ? bs.length-1 : bi-1) : ((bi<0||bi>=bs.length-1) ? 0 : bi+1);
+          try{ bs[nd].focus(); }catch(e2){}
+        }
+        return;
+      }
+      return;
+    }
 
     /* ---- 遥控器数字键直选频道（0-9，TV 版）----
        输入数字后 1.2 秒内无后续数字 → 跳到该序号频道。
