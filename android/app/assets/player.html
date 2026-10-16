@@ -729,7 +729,8 @@ function setSrc(m){
   toast(m==="wvt"?"已切换到官网源":"已切换到本机源");
 }
 
-/* 播放/暂停按钮 UI 同步（v2.10.38：控制条已删，入口在设置浮层） */
+/* 播放/暂停按钮 UI 同步（v2.10.38：控制条已删；v2.10.44：设置里的「播放/暂停」也删了，
+   本函数当前**无调用方** —— 保留给原生侧将来恢复暂停同步用，留着不影响体积/行为） */
 function setPlayBtnUI(){
   try{ if(ovOpen("set")) renderSetPanel(); }catch(e){}
 }
@@ -2760,18 +2761,12 @@ function renderSetPanel(){
       if(srcMode!==t[0]){ closeAllOv(); setSrc(t[0]); }
     });
   });
-  /* 播放控制（v2.10.38：底部控制条删除，节目单/线路/秒开/暂停/全屏入口全部收进这里；
-     收藏保留在顶栏 ☆，这里再给一个入口方便遥控器） */
+  /* 播放控制（v2.10.38：底部控制条删除，节目单/线路/秒开入口全部收进这里；
+     v2.10.39：顶栏也删了，本浮层从此是**唯一**功能入口）
+     ★ v2.10.44（用户定稿）：删除「播放 / 暂停」与「全屏 / 退出全屏」两项 ——
+     直播不需要暂停；全屏由启动逻辑自动进入（见 setFsMode 调用点），不给手动开关。
+     删后本段只剩 秒开 / 收藏 / 节目单 / 线路‹N/M› 四行。 */
   var pbBox=sec("播放控制");
-  var paused = NATIVE.active ? isNativePaused : ($("v") && $("v").paused);
-  opt(pbBox, paused ? "▶ 播放" : "⏸ 暂停", false, function(){
-    if(NATIVE.active){
-      if(!isNativePaused){ if(window.NativeTV && NativeTV.nativePause){ NativeTV.nativePause(); isNativePaused=true; } }
-      else if(window.NativeTV && NativeTV.nativeResume){ NativeTV.nativeResume(); isNativePaused=false; }
-    } else { var v=$("v"); if(v.paused){ v.play(); } else { v.pause(); } }
-    setPlayBtnUI();          /* 内部会重渲染本面板，刷新「播放/暂停」文案 */
-  });
-  opt(pbBox, isFsMode() ? "退出全屏" : "全屏", false, function(){ toggleFs(); });
   opt(pbBox, (TUNE !== "stable") ? "⚡ 秒开 → 点切「稳定」" : "🛡 稳定 → 点切「秒开」", false,
       function(){ setTune(TUNE === "fast" ? "stable" : "fast"); });
   opt(pbBox, isFav(cur.tid,cur.id) ? "★ 取消收藏" : "☆ 收藏当前频道", isFav(cur.tid,cur.id),
@@ -2821,16 +2816,10 @@ function renderSetPanel(){
       d.title="硬解通道不支持";
     }
   });
-  /* 播放信息：分辨率/码率（读 v2.8 的统计缓存，不额外打扰播放器） */
-  var infoBox=sec("播放信息");
+  /* 播放信息节（尺寸/码率）v2.10.44 已按用户要求删除；底部 foot 仍保留时钟/网速/分辨率角标。 */
   var st = NATIVE.lastStats || {};
   var resTxt = (st.width && st.height) ? (st.width+"x"+st.height)
              : (($("v").videoWidth && $("v").videoHeight) ? $("v").videoWidth+"x"+$("v").videoHeight : "—");
-  var brTxt = st.bandwidth ? Math.round(st.bandwidth/1000)+" kbps" : "—";
-  var d1=document.createElement("div"); d1.className="opt"; d1.style.cursor="default";
-  d1.textContent="尺寸 "+resTxt; infoBox.appendChild(d1);
-  var d2=document.createElement("div"); d2.className="opt"; d2.style.cursor="default";
-  d2.textContent="码率 "+brTxt; infoBox.appendChild(d2);
   /* 底部：图标 + 时钟(秒级) + 网速（码率折算） */
   var foot=document.createElement("div"); foot.className="foot";
   var netBps = (st.bandwidth ? st.bandwidth/8 : 0);   /* bit/s */
