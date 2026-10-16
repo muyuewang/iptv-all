@@ -297,16 +297,17 @@
      ========================================================================*/
   /* ★ v2.10.13：浮层 z-index 6→700 —— 必须盖过 #status(600)：加载中状态页显示时
      单击唤出浮层，原来被压在状态页下面完全看不见（用户实测「点击没反应」，
-     要等起播 hideStatus 才露出来）。toast 800 / errCard 750 保持在其上。 */
-  .ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:700;display:none;background:rgba(0,0,0,.42);
+     要等起播 hideStatus 才露出来）。toast 800 / errCard 750 保持在其上。
+     ★ v2.10.46 用户「弹层有点黑，看不到后面的播放内容」：全屏遮罩 .42→.22。
+     这条遮罩**只对设置浮层生效**（#chOv 自己置为 transparent，见下），
+     它就是设置界面「左半屏整体发暗」的来源；挂板那一侧另有自己的底色。
+     （原文件里这条 .ov 规则重复写了三遍、内容完全相同，此次合并为一条。） */
+  .ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:700;display:none;background:rgba(0,0,0,.22);
     animation:layerIn .2s var(--ease);}
-  /* ★ v2.10.8：面板侧加深 + 视频侧渐透 —— 参考 WebViewTV 设置面板的「半屏暗渐变」：
-     列表所在一侧文字清晰可读，另一侧尽量透出画面。 */
-  .ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:700;display:none;background:rgba(0,0,0,.42);
-    animation:layerIn .2s var(--ease);}
-  /* ★ v2.10.8：频道列表改「左侧挂板」——列表收进左边一块面板（手机 62% 宽 / TV 52%），
+  /* ★ v2.10.8：频道列表改「左侧挂板」——列表收进左边一块面板（手机 284px / TV 374px），
      右侧大半屏完全透出视频；点视频区任意空白即关闭（比全屏浮层的「空白」大得多）。
-     参考 WebViewTV 设置面板的停靠式布局。 */
+     ★ chOv 不带全屏遮罩：右半屏是**裸视频**，所有暗感都来自这块挂板自己的底色
+     （实测 tools/_probe_alpha.py：右半屏 rgb=255 纯白底未被压暗）。 */
   #chOv{background:transparent;}
   /* ★ v2.10.18 面板收窄 64%→52%（用户反馈太宽、空白框多易误触；药丸贴内容后
      窄面板也放得下全名），min-width:300px 保窄竖屏手机。
@@ -326,17 +327,23 @@
      31 css → 15 css（其中 8 是故意留的呼吸位），实测 0 行截断。
      ★ 别再往下缩到 272 那档：会把「CCTV-4 中文国际（欧洲/美洲）」截成
      「…（欧…/美…」，把唯一区分字吃掉（tools/_probe_chwidth.py c_272 档实测 3 行截断）。 */
+  /* ★ v2.10.46 透明度：挂板底色 .94/.88 → .84/.76（实测平均 alpha .91→.80，
+     透过来的视频从 ~9% 提到 ~20%）。文字靠下面那条 text-shadow 保可读，
+     别再往下调到 .70 以下：频道编号用的是 --fg-mute(#6b7385)，
+     遇上纯白亮画面会掉到 2:1 对比度。*/
   #chOv > #chOvSrc{width:280px;width:min(284px,52%);min-width:280px;
-    background:linear-gradient(180deg,rgba(9,10,16,.94),rgba(9,10,16,.88));}
+    background:linear-gradient(180deg,rgba(9,10,16,.84),rgba(9,10,16,.76));}
   #chOv > .ovbody{width:280px;width:min(284px,52%);min-width:280px;
-    background:linear-gradient(180deg,rgba(9,10,16,.88),rgba(9,10,16,.94));
+    background:linear-gradient(180deg,rgba(9,10,16,.76),rgba(9,10,16,.84));
     border-right:1px solid rgba(255,255,255,.09);
     box-shadow:8px 0 40px rgba(0,0,0,.45);}
-  .ov{position:fixed;left:0;top:0;right:0;bottom:0;z-index:700;display:none;background:rgba(0,0,0,.42);
-    animation:layerIn .2s var(--ease);}
+  /* .ov 的定位与遮罩底色在「半透明浮层」一节头部统一定义（v2.10.46 起不再重复三遍） */
   .ov.show{display:flex;}
-  /* 底色变浅后给文字加投影保可读（视频亮画面直接衬在文字底下） */
-  .ov .cat,.ov .chi,.ov .sopt,.ov .opt,.ov .sec .t{text-shadow:0 1px 3px rgba(0,0,0,.9);}
+  /* 底色变浅后给文字加投影保可读（视频亮画面直接衬在文字底下）
+     ★ v2.10.46：挂板/面板透明度下调后，投影要更实一点（外扩 + 加深），
+     否则白底亮画面上 --fg-dim/--fg-mute 会糊掉。 */
+  .ov .cat,.ov .chi,.ov .sopt,.ov .opt,.ov .sec .t{
+    text-shadow:0 1px 3px rgba(0,0,0,.95),0 1px 10px rgba(0,0,0,.75);}
   .ovcol{flex-direction:column;}
   .ovbody{flex:1;display:flex;min-height:0;width:100%;}
   /* 频道列表浮层顶部：本机源 / 官网源 选择（v2.10.1：旧列表页退役后源入口搬到这里） */
@@ -393,7 +400,9 @@
      （原来 min(330px,82%) 几乎铺满手机屏，看不出是贴右侧的抽屉）。
      宽度/间距在已装版本上逐组试参截图后选定（tools/_probe_setov.py）。 */
   #setOv{justify-content:flex-end;}
-  #setOv .panel{width:56%;width:min(236px,56%);height:100%;background:rgba(10,11,15,.8);
+  /* ★ v2.10.46 透明度：面板底色 .8 → .60（实测 alpha .83→.63，透过来的视频约翻倍）。
+     面板里是短标签药丸（.opt），没有 --fg-mute 长段落，可以比挂板更透。 */
+  #setOv .panel{width:56%;width:min(236px,56%);height:100%;background:rgba(10,11,15,.6);
     border-left:1px solid rgba(255,255,255,.1);padding:16px 15px;overflow:auto;
     display:flex;flex-direction:column;gap:14px;scrollbar-width:none;}
   #setOv .panel::-webkit-scrollbar{display:none;}
@@ -542,7 +551,7 @@ var isNativePaused = false;      /* 原生播放器是否被手动暂停 */
 
 /* ---------- 数据源：local=本机直播源 / wvt=官网源（WebViewTV） ----------
    两边频道表结构完全不同，各自记一份「上次看到哪儿」，来回切不迷路：
-     localCat   本机源下的分类 tid（含 fav）
+     localCat   本机源下的分类 tid
      WVT.cur    官网源下的分组名
    ---------------------------------------------------------------------- */
 var srcMode = "local";
@@ -717,8 +726,6 @@ function setStChannel(no, name){
   if(m) m.textContent = name || "";
 }
 function logoSrc(n){ return C.logoSrc(n, window.LOGOS); }
-function favArr(){ return C.favArr(); }
-function isFav(t,i){ return C.isFav(t,i); }
 
 /* ---------- 数据源切换（本机源 / 官网源） ----------
    v2.10.6：旧列表页删除后只剩状态切换 —— 渲染全部由 chOv 浮层负责。 */
@@ -735,15 +742,13 @@ function setPlayBtnUI(){
   try{ if(ovOpen("set")) renderSetPanel(); }catch(e){}
 }
 
-/* ---------- 收藏 ----------
-   ★ v2.10.45：设置浮层里的「☆ 收藏当前频道」已按用户要求删除，本函数与 isFav()
-   目前**无 UI 调用方**。底层 C.toggleFav / C.isFav（tv_core.js）与频道列表本机源的
-   「⭐ 收藏」分类都还在 → 收藏变成**只读存量**（能看，不能加）。留着不动，
-   等哪天把入口加回频道列表（例如长按条目加星）直接复用。 */
-function toggleFav(tid,id,name){
-  var added = C.toggleFav(tid,id,name);
-  toast(added ? "已收藏" : "已取消收藏");
-}
+/* ---------- 收藏（v2.10.46 起全端移除） ----------
+   ★ 删除轨迹：v2.10.45 删设置里的「☆ 收藏当前频道」行；v2.10.46 删频道列表
+   本机源的「⭐ 收藏」分类（唯一剩余可见入口）。至此收藏**彻底无 UI**：
+   本文件的 favArr()/isFav()/toggleFav() 包装函数已删；底层 C.favArr/isFav/
+   toggleFav（tv_core.js）保留但无人调用，旧数据仍躺 localStorage("fav")。
+   若将来要恢复：在频道列表条目上加星（长按或右侧 ☆）最合适 —— 从 C.toggleFav
+   直接调，别重造包装。 */
 
 /* ---------- EPG ---------- */
 function renderEpg(){
@@ -2373,11 +2378,10 @@ var RENDER = { arr:[], n:0, chunk:48, io:null };
    与遥控器切台仍然需要「当前频道列表」这一数据；由 loadCat / pickGroup /
    renderChOvChs 负责填充。 */
 
-/* 本机源分类（含收藏）。官网源不走这里，见 setSrc → loadWvt */
+/* 本机源分类。官网源不走这里，见 setSrc → loadWvt */
 function loadCat(tid){
   /* v2.10.6：只维护数据（allChans / RENDER.arr），渲染交给 chOv 浮层 */
   curCat=tid;
-  if(tid==="fav"){ allChans=favArr().slice(); RENDER.arr=allChans; return; }
   C.fetchChannels(tid).then(function(arr){
     allChans=arr||[];
     if(srcMode!=="wvt" && curCat===tid) RENDER.arr=allChans;
@@ -2589,17 +2593,18 @@ window.__tvBack = function(){
 /* ---------- 频道列表浮层：左分组 + 右编号频道，当前频道橙色高亮 ---------- */
 var CHOV = { group:"", src:"" };   /* 浮层自己的分组视图（不动底层列表状态） */
 function chOvGroups(){
-  /* 返回 [源, 分组key, 显示名] 三元组（本机分类的 key 是 tid，显示名要查 CATS） */
+  /* 返回 [源, 分组key, 显示名] 三元组（本机分类的 key 是 tid，显示名要查 CATS）
+     ★ v2.10.46：本机源「⭐ 收藏」分类已按用户要求整体移除 —— 收藏是全端
+     唯一的加星入口（v2.10.45 删掉设置里的收藏行、本分类是最后可见入口），
+     删掉后收藏彻底无 UI：底层 C.favArr/isFav/toggleFav（tv_core.js）保留但无人调用，
+     旧收藏数据仍躺在 localStorage("fav") 里，不再显示。 */
   if(srcMode==="wvt" && WVT.ready && WVT.groups.length) return WVT.groups.map(function(g){ return ["wvt", g, g]; });
-  var a=[["local","fav","⭐ 收藏"]]; CATS.forEach(function(c){ a.push(["local", c[0], c[1]]); });
+  var a=[]; CATS.forEach(function(c){ a.push(["local", c[0], c[1]]); });
   return a;
 }
 function chOvChans(src, key){  if(src==="wvt"){
     var ids=(WVT.byGroup && WVT.byGroup[key]) || [];
     return ids.map(function(id,i){ return { tid:"wvt", id:id, name:WVT.byId[id].name, no:i+1 }; });
-  }
-  if(key==="fav"){
-    return favArr().map(function(f,i){ return { tid:f.tid, id:f.id, name:f.name, no:i+1 }; });
   }
   /* 本机分类：用已缓存的 allChans（当前分类一致时零开销），否则现拉 */
   if(curCat===key && allChans.length){
@@ -2691,7 +2696,7 @@ function renderChOvSrc(){
     d.onclick=function(){
       if(CHOV.src===t[0]) return;
       CHOV.src=t[0];
-      CHOV.group = (t[0]==="wvt") ? (WVT.cur||"央视") : (curCat==="fav"?"tv":curCat);
+      CHOV.group = (t[0]==="wvt") ? (WVT.cur||"央视") : curCat;
       try{ setSrc(t[0]); }catch(e){}
       renderChOvSrc(); renderChOvCats(); renderChOvChs();
     };
@@ -2723,9 +2728,9 @@ function openChOv(){
       }
       CHOV.group = hit || WVT.cur;
     } else if(curTid){
-      /* 本机源频道：分组就是它的分类 key（收藏另算） */
+      /* 本机源频道：分组就是它的分类 key */
       CHOV.src="local";
-      CHOV.group = (curTid==="fav") ? "fav" : curTid;
+      CHOV.group = curTid;
     }
   }catch(e){}
   closeSetOv();
@@ -2769,12 +2774,7 @@ function renderSetPanel(){
      v2.10.39：顶栏也删了，本浮层从此是**唯一**功能入口）
      ★ v2.10.44（用户定稿）：删除「播放 / 暂停」与「播放信息」小节 —— 直播不需要暂停，
      信息与底部 .foot 重复。
-     ★ v2.10.45（用户定稿）：「收藏」删掉、「全屏 / 退出全屏」加回来。
-     ★★ 收藏的后果（登记在案，别当 bug 修）：本行曾是**全端唯一**的收藏入口
-     （v2.10.39 顶栏☆已删）。删掉后 `C.toggleFav` / `toggleFav()` 不再被任何 UI 调用，
-     收藏变成**只读存量**：频道列表里本机源的「⭐ 收藏」分类仍会显示旧数据，
-     但再也加不进新频道（官网源本来就没有该分类）。要恢复收藏功能，先看
-     `分层职责与生命周期.md` §9。 */
+     ★ v2.10.45（用户定稿）：「收藏」删掉、「全屏 / 退出全屏」加回来。 */
   var pbBox=sec("播放控制");
   opt(pbBox, isFsMode() ? "退出全屏" : "全屏", false, function(){ toggleFs(); });
   opt(pbBox, (TUNE !== "stable") ? "⚡ 秒开 → 点切「稳定」" : "🛡 稳定 → 点切「秒开」", false,
