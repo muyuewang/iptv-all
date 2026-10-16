@@ -735,7 +735,11 @@ function setPlayBtnUI(){
   try{ if(ovOpen("set")) renderSetPanel(); }catch(e){}
 }
 
-/* ---------- 收藏 ---------- */
+/* ---------- 收藏 ----------
+   ★ v2.10.45：设置浮层里的「☆ 收藏当前频道」已按用户要求删除，本函数与 isFav()
+   目前**无 UI 调用方**。底层 C.toggleFav / C.isFav（tv_core.js）与频道列表本机源的
+   「⭐ 收藏」分类都还在 → 收藏变成**只读存量**（能看，不能加）。留着不动，
+   等哪天把入口加回频道列表（例如长按条目加星）直接复用。 */
 function toggleFav(tid,id,name){
   var added = C.toggleFav(tid,id,name);
   toast(added ? "已收藏" : "已取消收藏");
@@ -2259,7 +2263,7 @@ function bindTapToOpen(){
       /* 这一击已经用来关浮层了（ovClickClose 在冒泡更深处先跑）→ 不再开新浮层 */
       if(e.__ovClosedByMe) return;
       var t=e.target;
-      /* 自有 UI 自己处理：顶栏(收藏)、浮层、确认卡遮罩/卡片、toast 按钮不参与唤浮层 */
+      /* 自有 UI 自己处理：#ctrl 空壳、浮层、确认卡遮罩/卡片、toast 按钮不参与唤浮层 */
       if(t.closest && t.closest("#ctrl,.ov,#errCard,#cardMask,#toasts")) return;
       /* ★ v2.10.42 状态级保险：卡片在场时，空白点击一律不开浮层 —— 不再只依赖命中目标
          （探针曾抓到一次「点卡片内部却把设置浮层开在卡片背后」，虽未稳定复现，
@@ -2763,14 +2767,18 @@ function renderSetPanel(){
   });
   /* 播放控制（v2.10.38：底部控制条删除，节目单/线路/秒开入口全部收进这里；
      v2.10.39：顶栏也删了，本浮层从此是**唯一**功能入口）
-     ★ v2.10.44（用户定稿）：删除「播放 / 暂停」与「全屏 / 退出全屏」两项 ——
-     直播不需要暂停；全屏由启动逻辑自动进入（见 setFsMode 调用点），不给手动开关。
-     删后本段只剩 秒开 / 收藏 / 节目单 / 线路‹N/M› 四行。 */
+     ★ v2.10.44（用户定稿）：删除「播放 / 暂停」与「播放信息」小节 —— 直播不需要暂停，
+     信息与底部 .foot 重复。
+     ★ v2.10.45（用户定稿）：「收藏」删掉、「全屏 / 退出全屏」加回来。
+     ★★ 收藏的后果（登记在案，别当 bug 修）：本行曾是**全端唯一**的收藏入口
+     （v2.10.39 顶栏☆已删）。删掉后 `C.toggleFav` / `toggleFav()` 不再被任何 UI 调用，
+     收藏变成**只读存量**：频道列表里本机源的「⭐ 收藏」分类仍会显示旧数据，
+     但再也加不进新频道（官网源本来就没有该分类）。要恢复收藏功能，先看
+     `分层职责与生命周期.md` §9。 */
   var pbBox=sec("播放控制");
+  opt(pbBox, isFsMode() ? "退出全屏" : "全屏", false, function(){ toggleFs(); });
   opt(pbBox, (TUNE !== "stable") ? "⚡ 秒开 → 点切「稳定」" : "🛡 稳定 → 点切「秒开」", false,
       function(){ setTune(TUNE === "fast" ? "stable" : "fast"); });
-  opt(pbBox, isFav(cur.tid,cur.id) ? "★ 取消收藏" : "☆ 收藏当前频道", isFav(cur.tid,cur.id),
-      function(){ toggleFav(cur.tid,cur.id,cur.name); renderSetPanel(); });
   opt(pbBox, "📺 节目单", false, function(){
     closeAllOv(); closeLinePanel(); renderEpg(); $("epg").classList.add("show");
   });
