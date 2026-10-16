@@ -859,6 +859,10 @@ public class MainActivity extends Activity {
         if (v.getParent() == null) {
             /* 插到主 WebView 之前 = 主 WebView 之下（root 是 FrameLayout，
                插入顺序即 z 序）。此时主 WebView 透明（frame-on），画面照常透出。 */
+            /* ★ v2.10.42：先压 alpha=0 再挂上去 —— 预热的 WebView 实例是「从没显示过、
+               alpha 默认 1」的，挂上来到下面那句 setAlpha(0) 之间会露出它的 about:blank
+               （白底）一帧；用户侧就是「网页短暂显示一下」的来源之一。 */
+            try { v.setAlpha(0f); } catch (Throwable ignore) {}
             int at = root.indexOfChild(web);
             root.addView(v, (web != null && at >= 0) ? at : 0, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -892,6 +896,14 @@ public class MainActivity extends Activity {
         if (pageView == null) return;
         try {
             if (pageView.getAlpha() >= 1f) return;
+            /* ★ v2.10.42：页面要露脸了 —— 先让网页收掉状态页（频道号/频道名/解析中那几行）。
+               加载期网页是 frame-on 透明底，状态页只剩文字；官方页一淡入就会出现
+               「官方页画面 + 我们的频道文字」两层叠加，用户看到的是官方页（含它自己的
+               导航条）却点不动（点击落在主 WebView 上），反馈为「网页短暂显示时点击有问题」。
+               现在同一时刻只留一个视觉主体。 */
+            jsApp("try{window.__pageGoingVisible&&window.__pageGoingVisible()}catch(e){}");
+            android.util.Log.i("CleanTV/LC", "fadeInPage 收状态页并淡入 alpha="
+                    + pageView.getAlpha() + " playingSeen=" + pagePlayingSeen);
             pageView.animate().alpha(1f).setDuration(450).start();
         } catch (Throwable ignore) {
             try { pageView.setAlpha(1f); } catch (Throwable ig) {}

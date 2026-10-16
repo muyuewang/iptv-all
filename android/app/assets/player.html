@@ -403,6 +403,19 @@
     border:1px solid rgba(255,255,255,.12);font-size:13px;color:var(--fg-dim);cursor:pointer;}
   #setOv .opt:active{background:rgba(255,255,255,.12);}
   #setOv .opt.on{background:var(--brand-grad);color:#fff;border-color:transparent;font-weight:600;}
+  /* ★ v2.10.42：原生硬解通道下不可用的选项（画面比例）—— 置灰 + 点击只给明确说明，
+     不再"点了没反应"（原生画面由 ExoPlayer Surface 输出，网页 <video> 的 objectFit 无效） */
+  #setOv .opt.off{opacity:.4;cursor:not-allowed;text-decoration:line-through;}
+  /* 线路切换器（v2.10.42：‹ 线路N › 直接切，不再弹面板） */
+  #setOv .opt.linesw{display:flex;align-items:center;gap:10px;padding:6px 10px;cursor:default;background:transparent;border-color:transparent;}
+  #setOv .opt.linesw .arw{flex:0 0 auto;width:38px;height:38px;line-height:36px;text-align:center;border-radius:999px;
+    background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.16);font-size:20px;font-weight:700;
+    color:#fff;cursor:pointer;user-select:none;}
+  #setOv .opt.linesw .arw:active{background:var(--brand-grad);border-color:transparent;}
+  #setOv .opt.linesw .arw.off{opacity:.3;cursor:not-allowed;}
+  #setOv .opt.linesw .lb2{min-width:86px;text-align:center;font-size:13px;color:var(--fg-dim);}
+  body.tv #setOv .opt.linesw .arw{width:48px;height:48px;line-height:46px;font-size:24px;}
+  body.tv #setOv .opt.linesw .lb2{font-size:17px;min-width:120px;}
   #setOv .foot{margin-top:auto;display:flex;align-items:center;gap:12px;
     color:var(--fg-dim);font-size:12.5px;}
   #setOv .foot .ic{font-size:16px;}
@@ -2233,6 +2246,10 @@ function bindTapToOpen(){
       var t=e.target;
       /* 自有 UI 自己处理：顶栏(收藏)、浮层、确认卡遮罩/卡片、toast 按钮不参与唤浮层 */
       if(t.closest && t.closest("#ctrl,.ov,#errCard,#cardMask,#toasts")) return;
+      /* ★ v2.10.42 状态级保险：卡片在场时，空白点击一律不开浮层 —— 不再只依赖命中目标
+         （探针曾抓到一次「点卡片内部却把设置浮层开在卡片背后」，虽未稳定复现，
+         这里用状态兜底，把这条路彻底封死）。 */
+      if($("errCard") && $("errCard").classList.contains("show")) return;
       if(anyOvOpen()) return;      /* 浮层铺满全屏，点击都落在它身上（ovClickClose 负责关） */
       var now = Date.now();
       var left = (isFinite(e.clientX) ? e.clientX : 0) * 2 < window.innerWidth;
@@ -2466,6 +2483,17 @@ try{
 }catch(e){}
 
 /* BACK 优先级（由 MainActivity 的注入 JS 调用）：返回 '1' 表示已消费 */
+/* ★ v2.10.42：官方页「要露脸」了 —— 原生 fadeInPage() 淡入前会调这里。
+   背景：加载期我们的状态页是「透明底 + 文字」（frame-on），原生那边一旦把官方页
+   淡入（起播报 playing / 20s 兜底），就会短暂出现「官方页画面 + 我们的频道文字」
+   两层叠加 —— 用户看到的是官方页（含它自己的导航条）却点不动（点击落在我们这层），
+   反馈为「网页短暂显示时点击有问题」。这里在页面露脸的同一时刻收掉状态页，
+   保证任何时刻只有一个视觉主体。 */
+window.__pageGoingVisible = function(){
+  try{ hideStatus(); }catch(e){}
+  try{ setStatus(null); }catch(e){}
+  return "1";
+};
 window.__overlayBack = function(){
   if(anyOvOpen()){ closeAllOv(); return "1"; }
   return "0";
@@ -2698,18 +2726,47 @@ function renderSetPanel(){
   opt(pbBox, "📺 节目单", false, function(){
     closeAllOv(); closeLinePanel(); renderEpg(); $("epg").classList.add("show");
   });
-  opt(pbBox, "🔄 切换线路", false, function(){
-    closeAllOv(); $("epg").classList.remove("show"); openLinePanel();
-    if(IS_TV){ try{ var li=document.querySelector("#lineGrid .line-item"); if(li) li.focus(); }catch(e){} }
-  });
-  /* 画面比例（与 btnRatio 同一套 contain/cover/fill） */
+  /* ★ v2.10.42（用户定稿）：线路改成「‹ 线路N/M ›」直接切换 —— 不再弹面板选。
+     面板（#linePanel）仍保留在「播放失败卡 → 手动选线路」里用（失败时才需要精确挑一条）。 */
+  (function(){
+    var n=(cur.urls||[]).length;
+    var row=document.createElement("div");
+    row.className="opt linesw";
+    row.tabIndex=-1;
+    var prev=document.createElement("span"); prev.className="arw"; prev.textContent="‹";
+    var lab=document.createElement("span"); lab.className="lb2";
+    lab.textContent = n>0 ? ("线路 "+(cur.idx+1)+" / "+n) : "线路 —";
+    var next=document.createElement("span"); next.className="arw"; next.textContent="›";
+    if(n<2){ prev.className+=" off"; next.className+=" off"; }
+    function step(d){
+      var m=(cur.urls||[]).length;
+      if(m<2){ toast("该频道只有 1 条线路"); return; }
+      playIdx((cur.idx+d+m)%m);      /* 直接切，换线后不关设置浮层，方便连点 */
+      ovAutoKeep();
+      renderSetPanel();              /* 重渲染刷新「线路 x / m」 */
+    }
+    prev.onclick=function(e){ if(e&&e.stopPropagation) e.stopPropagation(); step(-1); };
+    next.onclick=function(e){ if(e&&e.stopPropagation) e.stopPropagation(); step(1); };
+    row.appendChild(prev); row.appendChild(lab); row.appendChild(next);
+    pbBox.appendChild(row);
+  })();
+  /* 画面比例（与 btnRatio 同一套 contain/cover/fill）
+     ★ v2.10.42：走原生硬解时这三项**无效**（画面由 ExoPlayer 的 Surface 输出，
+     网页 <video> 根本不在画面上）—— 之前点了只弹 toast、画面不动，用户以为坏了。
+     现在直接置灰 + 点击给明确说明，不做假动作。 */
   var ratios=[["contain","适应"],["cover","铺满"],["fill","拉伸"]];
   var ri=($("v").dataset.ri|0);
+  var nativeHard = !!(window.NATIVE && NATIVE.active);
   var rBox=sec("画面比例");
   ratios.forEach(function(r,i){
-    opt(rBox, r[1], i===ri, function(){
+    var d=opt(rBox, r[1], i===ri, function(){
       $("v").dataset.ri=i; $("v").style.objectFit=r[0]; toast("画面比例："+r[1]);
     });
+    if(nativeHard && d){
+      d.classList.add("off");
+      d.onclick=function(){ toast("硬解通道不支持画面比例（本机源硬解 / 直链）"); };
+      d.title="硬解通道不支持";
+    }
   });
   /* 播放信息：分辨率/码率（读 v2.8 的统计缓存，不额外打扰播放器） */
   var infoBox=sec("播放信息");
