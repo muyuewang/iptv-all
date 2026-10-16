@@ -657,9 +657,11 @@ function hideErrCard(){
   var c = $("errCard"); if(c) c.classList.remove("show");
   try{ $("cardMask").classList.remove("show"); }catch(e){}
 }
-/* 遮罩点击：只吞掉事件（不关卡片）—— 失败卡/退出卡都要用户明确点按钮或按 BACK */
+/* ★ v2.10.42（用户定稿）：点卡片外面 = 取消（关掉卡片）。
+   同时打 __ovClosedByMe —— 这一击已经被卡片消费，别再顺手把浮层开出来
+   （bindTapToOpen 看到该标记直接放行；#cardMask 也在它的自有 UI 名单里）。 */
 try{ $("cardMask").addEventListener("click", function(e){
-  try{ e.stopPropagation(); e.preventDefault(); }catch(_){}
+  try{ e.__ovClosedByMe = true; hideErrCard(); }catch(_){}
 }); }catch(e){}
 
 /* 播放层状态页（v2.10.8）：黑底整屏「频道号 + 频道名 + 渐进状态行」。
@@ -2212,14 +2214,25 @@ function bindTapToOpen(){
        · 只吞「立刻重开**刚刚关掉的那个**浮层」——关设置后点左边开列表 = 新意图，立刻生效；
        · 关浮层的那一击自身绝不再开浮层（事件上打标记，见 ovClickClose）；
        · 点自有 UI（顶栏/浮层/确认卡）不再污染后续点击。 */
+  /* ★ v2.10.42（用户定稿）：**长按 = 无操作**。
+     Chrome 在长按抬起时照样派发一次 click（旧版「长按唤控制条」已退役，于是长按变成
+     「唤浮层 + 紧接一击又关掉」的闪一下）。这里按下时记时刻，抬起产生的 click 若
+     已超过 LONG_TAP，就整击丢弃；不影响正常单击（<500ms）与遥控器 OK（无 mousedown）。 */
+  var LONG_TAP = 500, pressT = 0;
+  document.addEventListener("mousedown", function(){ pressT = Date.now(); }, true);
+  document.addEventListener("touchstart", function(){ pressT = Date.now(); }, true);
+  document.addEventListener("keydown", function(){ pressT = 0; }, true);  /* 键盘点击不吃这一套 */
   document.addEventListener("click", function(e){
     try{
+      var held = pressT ? (Date.now() - pressT) : 0;
+      pressT = 0;
+      if(held >= LONG_TAP) return;                 /* 长按 → 无操作 */
       if(!$("player").classList.contains("show")) return;
       /* 这一击已经用来关浮层了（ovClickClose 在冒泡更深处先跑）→ 不再开新浮层 */
       if(e.__ovClosedByMe) return;
       var t=e.target;
-      /* 自有 UI 自己处理：顶栏(收藏)、浮层、确认卡、toast 按钮不参与唤浮层 */
-      if(t.closest && t.closest("#ctrl,.ov,#errCard,#toasts")) return;
+      /* 自有 UI 自己处理：顶栏(收藏)、浮层、确认卡遮罩/卡片、toast 按钮不参与唤浮层 */
+      if(t.closest && t.closest("#ctrl,.ov,#errCard,#cardMask,#toasts")) return;
       if(anyOvOpen()) return;      /* 浮层铺满全屏，点击都落在它身上（ovClickClose 负责关） */
       var now = Date.now();
       var left = (isFinite(e.clientX) ? e.clientX : 0) * 2 < window.innerWidth;
