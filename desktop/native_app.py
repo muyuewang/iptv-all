@@ -2815,18 +2815,22 @@ class NativeApp:
         except Exception:
             self._load_after = None
 
-    def _mpv_child(self):
+    def _mpv_child(self, host=0):
         """video_host 下是否已出现 mpv/WebView2 的原生子窗口（>100x100）。
 
-        mpv 的视频子窗口在 vo 初始化（≈ 第一帧上屏）时才创建 —— 拿它当
-        「真的出画面了」的信号，比进程存活准确得多。
+        mpv 的视频子窗口在 vo 初始化（≈ 开始播放流程）时才创建。
+        ★ v2.10.47：host 必须由**主线程**取好 winfo_id() 传进来 —— 本方法
+          跑在后台线程，线程里调 Tk（winfo_id）会抛 "main thread is not in
+          main loop" → 旧版 except 恒 False，子窗口检测从未生效，等待层
+          一直是 8 秒兜底收掉的（本机源「进度条完→黑屏几秒」主诉的根因之一）。
         """
         if not IS_WIN:
             return True             # Linux/X11 没法枚举，直接当就绪（收掉等待层）
         try:
             import ctypes
             from ctypes import wintypes
-            host = self.video_host.winfo_id()
+            if not host:
+                return False
         except Exception:
             return False
         found = []
@@ -2853,26 +2857,156 @@ class NativeApp:
         ctypes.windll.user32.EnumChildWindows(host, cb, 0)
         return bool(found)
 
-    def _wait_first_frame(self, gen, timeout=30):
-        """后台轮询：mpv 视频子窗口出现（或超时兜底）就收掉等待层。"""
+    def _wait_first_frame(self, gen, host=0, timeout=30):
+        """后台轮询：等「首帧真的解码出来」再收掉等待层。
+
+        ★ v2.10.47：不能拿「mpv 视频子窗口出现」当首帧 —— --wid + --vo=gpu
+          下 mpv 在 **vo 初始化**（= 刚开始播放流程）就建子窗口，而 HTTP-FLV
+          本机源从建窗到第一帧真正解码上屏还要探测流格式 + 填 demuxer 缓冲
+          （实测好几秒）—— 旧逻辑在这之前就收层，用户对着黑屏干等。
+          真信号 = IPC 查 video-params：第一个视频帧解码完成后才非空。
+          单独开一条 IPC 连接轮询（mpv 支持多客户端，不碰主控制连接）；
+          IPC 连不上/失效则退回旧判定（子窗口≈首帧），不会比修复前更差。
+        ★ host=宿主 HWND（主线程取好传入，后台线程禁碰 Tk，见 _mpv_child）。
+        """
         t0 = time.time()
+        probe = None
+        probe_dead = False
+        fit_pushed = False
+        tl_checked = 0.0
+        conn_err = 0
         while time.time() - t0 < timeout:
             if gen != self._mpv_gen:
+                self._ipc_probe_close(probe)
                 return              # 已换台/停止：新一轮有它自己的等待层
-            if self._mpv_child():
-                # v2.10.30：视频子窗口刚出现（≈首帧）→ 立刻把宿主尺寸推给它。
+            have_win = self._mpv_child(host)
+            if have_win and not fit_pushed:
+                # v2.10.30：视频子窗口刚出现 → 立刻把宿主尺寸推给它。
                 # mpv 建窗时用的是自己的尺寸，不主动推就一直是错的（见 _spawn_mpv）。
                 self._ui(self._fit_children)
-                break
-            # ★ v2.10.22 兜底：mpv 进程活着、已等 8 秒还没等到视频子窗口
-            #   （子窗口枚举偶有漏判，比如驱动/窗口类名差异），别让转圈一直
-            #   挂到 30 秒 —— 收掉等待层，画面会自己出来。
-            if time.time() - t0 > 8:
+                fit_pushed = True
+            # 探测连接从轮询一开始就连（mpv 管道起来就有了），不等子窗口 ——
+            # 实测子窗口≈首帧才出现，慢源（首帧 8~12s）必须靠 IPC 判活才等得到。
+            if not probe_dead and probe is None:
+                probe = self._ipc_probe_open()
+                if probe is None:
+                    probe_dead = True
+            if probe is not None:
+                r = self._ipc_probe_video(probe)
+                if r is None:
+                    conn_err += 1
+                    if conn_err >= 3:   # 连续失效 → 退回旧判定（瞬时抖动不计）
+                        self._ipc_probe_close(probe)
+                        probe = None
+                        probe_dead = True
+                else:
+                    conn_err = 0
+                    if r is True:
+                        break       # ★ 首帧已解码 → 收层，画面立刻可见
+                    # 每 1s 查一次 track-list：纯音频台永远等不到
+                    # video-params，别让它空转到超时。
+                    now = time.time()
+                    if now - tl_checked > 1.0:
+                        tl_checked = now
+                        if self._ipc_probe_no_video(probe) is True:
+                            break
+                    # IPC 活着 → 比旧版 8s 兜底更有耐心（慢源首帧实测
+                    # 8~12s），20s 封顶防死流挂死；mpv 自身 12s 网络超时
+                    # 也会退出交给换线看门狗。
+                    if now - t0 > 20:
+                        break
+            elif probe_dead:
+                if have_win:
+                    break           # 旧判定：子窗口≈首帧
+                if time.time() - t0 > 8:
+                    # ★ v2.10.22 兜底（仅 IPC 不可用时生效）：mpv 活着但
+                    #   一直没等到子窗口 → 收层，画面会自己出来。
+                    p = self.mpv_proc
+                    if p is None or p.poll() is None:
+                        break
                 p = self.mpv_proc
-                if p is not None and p.poll() is None:
-                    break
+                if p is not None and p.poll() is not None:
+                    break           # mpv 已退出（换线看门狗接管）→ 别再转圈
             time.sleep(0.1)          # v2.10.22：250ms → 100ms，首帧更早收掉等待层
+        self._ipc_probe_close(probe)
         self._ui(self._hide_loading)
+
+    def _ipc_probe_open(self):
+        """给等待层单独开一条 mpv IPC 连接（不影响主控制连接，mpv 支持多客户端）。
+
+        ★ 必须用 buffering=0 的裸句柄（与 MpvIPC.connect 一致）——带缓冲的
+          open() 在命名管道上偶发 OSError 22（实测踩坑），会把整条探测线
+          打死、退化回 8s 兜底。
+        """
+        pipe = self._pipe_path()
+        t0 = time.time()
+        while time.time() - t0 < 3.0:
+            try:
+                if IS_WIN:
+                    return open(pipe, "r+b", buffering=0)
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.connect(pipe)
+                s.settimeout(2.0)
+                return s
+            except Exception:
+                time.sleep(0.2)
+        return None
+
+    @staticmethod
+    def _ipc_probe_line(conn):
+        """裸句柄读一行（阻塞到 \\n / 连接关闭）；None=失效。"""
+        buf = b""
+        while not buf.endswith(b"\n"):
+            try:
+                c = conn.read(1) if IS_WIN else conn.recv(1)
+            except Exception:
+                return None
+            if not c:
+                return None
+            buf += c
+            if len(buf) > 65536:
+                return None
+        return buf
+
+    @staticmethod
+    def _ipc_probe_video(conn):
+        """True=首个视频帧已解码（video-params 非空）；False=还没有；None=连接失效。"""
+        try:
+            payload = (json.dumps(
+                {"command": ["get_property", "video-params"]}) + "\n").encode()
+            conn.write(payload)
+            line = NativeApp._ipc_probe_line(conn)
+            if line is None:
+                return None
+            return bool(json.loads(line.decode("utf-8", "ignore")).get("data"))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ipc_probe_no_video(conn):
+        """True=流里没有视频轨（纯音频台，别等 video-params）；False=有/未知；None=失效。"""
+        try:
+            payload = (json.dumps(
+                {"command": ["get_property", "track-list"]}) + "\n").encode()
+            conn.write(payload)
+            line = NativeApp._ipc_probe_line(conn)
+            if line is None:
+                return None
+            tracks = json.loads(line.decode("utf-8", "ignore")).get("data")
+            if not tracks:          # 还在探测头部：轨未知，继续等
+                return False
+            return not any(t.get("type") == "video" for t in tracks)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ipc_probe_close(conn):
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     # ---------------- 选中高亮 ----------------
     def _mark_selected(self):
@@ -3039,8 +3173,11 @@ class NativeApp:
             #   WM_SIZE）。更坑的是它把窗口设成错尺寸的时机在**出画之后**
             #   （实测 >3 秒），一次性定时纠偏根本追不上。
             #   → 由 NativeApp._fit_watchdog 常驻纠偏（见该方法），这里不用管。
-            # 等待层先留着，等 mpv 的视频子窗口真正出现（≈第一帧上屏）再收
-            threading.Thread(target=self._wait_first_frame, args=(gen,), daemon=True).start()
+            # 等待层先留着，等 mpv 的**第一帧真正解码**（video-params 非空）再收。
+            # host 在主线程取好 HWND 传入 —— 后台线程禁碰 Tk（_mpv_child 注释）。
+            threading.Thread(target=self._wait_first_frame,
+                             args=(gen, self.video_host.winfo_id()),
+                             daemon=True).start()
             # 连 IPC（后台，连上后套用当前音量/画面比例）
             self.ipc = MpvIPC(pipe)
             threading.Thread(target=self._ipc_connect, args=(self.ipc,), daemon=True).start()
