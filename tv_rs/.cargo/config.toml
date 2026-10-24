@@ -1,0 +1,33 @@
+# tv_rs 构建配置 —— 已切到 MSVC（Windows SDK 已装好）
+#
+# 【为什么不用 vcvars64.bat】
+# 本环境沙箱把 `reg.exe` 列入程序黑名单，而 vcvars64.bat 内部靠 `reg query`
+# 探测 VS/SDK 路径。结果是 PATH 部分能生效、但 LIB / INCLUDE 完全没设上，
+# 于是 `LNK1181: cannot open input file 'kernel32.lib'`。
+# 这里改为手工钉死三者，效果等价且不依赖 reg.exe：
+#   linker  绝对路径 -> 绕开 PATH 里 PortableGit 的 /usr/bin/link（coreutils）
+#   LIB     绝对路径 -> kernel32.lib(SDK um) + libucrt(SDK ucrt) + CRT(MSVC)
+#   INCLUDE 绝对路径 -> 供将来需要编译 C 代码的 crate 使用
+#
+# 【为什么固定 SDK 10.0.26100.0】
+# 本机装了 18362/22621/26100 三套，取最新的 26100（Win11 23H2 SDK）。
+# 换 SDK 版本时改下面 LIB/INCLUDE 里的那三段版本号即可。
+#
+# 【验证方式】
+#   cargo test            # 纯 cargo，无需任何包装脚本
+#   bash test_msvc.sh     # 等价环境的最小复现，留作对照/排障
+#
+# 【历史】SDK 缺失期曾用 gnu 工具链 + 内置 MinGW 运行时绕行（见 git 历史里的
+# test.sh 与旧配置）。SDK 装好后已弃用 —— Tauri 只支持 MSVC。
+
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+# 绝对路径，避免 PATH 里 PortableGit 的 link.exe（coreutils link）抢占 MSVC 的 link.exe
+linker = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.exe"
+
+[env]
+# kernel32.lib 只来自 SDK 的 um 目录；MSVC 的 lib/x64 里只有 libcmt/libcpmt 等 CRT 库
+LIB = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/lib/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64"
+INCLUDE = "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/include;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/ucrt;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um;C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/winrt"

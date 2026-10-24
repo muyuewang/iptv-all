@@ -1,0 +1,20 @@
+[package]
+name = "clean-tv-core"
+version = "0.1.0"
+edition = "2021"
+description = "纯净电视 · Rust 数据层（从 shared/core.py / wvt.py 移植的纯逻辑）"
+license = "MIT"
+
+[dependencies]
+base64 = "0.22"
+regex = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+flate2 = "1.0"
+# AES-CBC 解密：用成熟 crate 替代 Python 版的手写 AES（更安全、更符合 Rust 惯例）。
+# Python 版手写 AES 是为了「零第三方依赖、不撑大 exe」；Rust 侧静态链接后体积可控。
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+
+# 本里程碑（数据层）只做纯逻辑，不引入任何 GUI / Windows / 网络运行时依赖。
+# 后续里程碑会按需加入：reqwest（HTTP）、tokio（异步）、tauri（GUI 壳）。
