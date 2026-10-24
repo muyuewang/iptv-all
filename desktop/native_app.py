@@ -1980,12 +1980,23 @@ class NativeApp:
         self._mark_selected()
 
     def _make_row(self, c):
-        row = tk.Frame(self.chan_frame, bg=BG, cursor="hand2")
-        row.pack(fill="x", padx=8, pady=2)
+        # 行高加大留白（pady 上下各 3px），名称用细字重，让列表更透气、更现代
+        row = tk.Frame(self.chan_frame, bg=GRS_BOT, cursor="hand2")
+        row.pack(fill="x", padx=8, pady=3)
+
+        # ★ 品牌渐变竖条：选中行左侧 3px 红橙竖条，作为「正在播放」的视觉锚点。
+        #   Tk 无真渐变，用上段品牌红 + 下段品牌橙叠出近似渐变。
+        #   ★ 必须最先 pack（在台标槽之前）才能紧贴行左边缘；
+        #     否则 side="left" 会排到先 pack 的控件后面去。
+        bar = tk.Frame(row, bg=GRS_BOT, width=3)
+        bar.pack(side="left", fill="y", padx=(0, 4))
+        seg_hi = tk.Frame(bar, bg=GRAD_HI)
+        seg_hi.pack(fill="both", expand=True)
+        row._seg_hi = seg_hi
 
         # 台标槽
         slot = tk.Frame(row, bg=GRS_BOT, width=LOGO_SIZE + 4, height=LOGO_SIZE + 4)
-        slot.pack(side="left", padx=(4, 8), pady=2)
+        slot.pack(side="left", padx=(0, 10), pady=2)
         slot.pack_propagate(False)
         badge = tk.Label(slot, text=(c["name"][:1] if c["name"] else "?"),
                          bg=badge_color(c["name"]), fg="#fff", font=self.F(12, True))
@@ -2032,14 +2043,6 @@ class NativeApp:
                                font=self.F(8, True), cursor="hand2")
             tag_lbl.pack(side="right", padx=(0, 7))
 
-        # ★ 品牌渐变竖条：选中行左侧 3px 红橙竖条，作为「正在播放」的视觉锚点。
-        #   Tk 无真渐变，用上段品牌红 + 下段品牌橙叠出近似渐变。
-        bar = tk.Frame(row, bg=GRS_BOT, width=3)
-        bar.pack(side="left", fill="y", padx=(0, 0))
-        seg_hi = tk.Frame(bar, bg=GRAD_HI)
-        seg_hi.pack(fill="both", expand=True)
-        row._seg_hi = seg_hi
-
         widgets = (row, slot, badge, name)
         if tag_lbl is not None:
             widgets = widgets + (tag_lbl,)
@@ -2065,23 +2068,55 @@ class NativeApp:
         bg = HOVER_BG if on else base
         for w in (row, name, badge, slot):
             try:
-                w.configure(bg=bg)
+                self._anim_bg(w, bg)
             except Exception:
                 pass
         tl = getattr(row, "_tag_lbl", None)     # 限免/VIP 角标背景跟随行
         if tl is not None:
             try:
-                tl.configure(bg=bg)
+                self._anim_bg(tl, bg)
             except Exception:
                 pass
         # 品牌渐变竖条：选中态亮起红橙，hover 短暂保持，未选中维持底色（不可见）
         seg = getattr(row, "_seg_hi", None)
         if seg is not None:
             try:
-                seg.configure(bg=GRAD_HI if (sel or on) else GRS_BOT)
+                self._anim_bg(seg, GRAD_HI if (sel or on) else GRS_BOT)
             except Exception:
                 pass
         name.configure(fg=FG if (on or sel) else FG_DIM)
+
+    def _anim_bg(self, widget, target, steps=8, interval=14):
+        """把 widget 底色从当前值平滑补间到 target。
+
+        Tk 无原生渐变动画，用 after 循环按帧插值逼近。每个 widget 独立带代次
+        （_anim_gen），新动画会作废旧动画的未完成帧 —— 快速连滑/连击时不会
+        出现「旧动画迟到，把颜色拉回」的竞态（同 C 铁律：异步回调带代次）。
+        """
+        try:
+            cur = widget.cget("bg")
+        except Exception:
+            return                        # 控件已被销毁（切分类/换分组），静默放弃
+        if not cur or cur == target:
+            return
+        gen = getattr(widget, "_anim_gen", 0) + 1
+        widget._anim_gen = gen
+        a = _hex_rgb(cur)
+        b = _hex_rgb(target)
+        frames = max(1, int(steps))
+
+        def _step(idx, gen):
+            if gen != getattr(widget, "_anim_gen", gen):
+                return                    # 已被更新的动画取代，放弃本帧
+            t = (idx + 1) / float(frames)
+            try:
+                widget.configure(bg=_lerp_rgb(a, b, t))
+            except Exception:
+                return                    # 控件中途销毁，不再续帧
+            if idx + 1 < frames:
+                self.root.after(interval, lambda: _step(idx + 1, gen))
+
+        _step(0, gen)
 
     @staticmethod
     def _clear(frame):
@@ -3062,14 +3097,15 @@ class NativeApp:
                 if getattr(row, "_sel", False) != sel:
                     row._sel = sel
                     bg = SEL_GRAD_LO if sel else GRS_BOT
-                    row.configure(bg=bg)
-                    name.configure(bg=bg, fg=FG if sel else FG_DIM)
+                    self._anim_bg(row, bg, steps=10, interval=18)
+                    name.configure(fg=FG if sel else FG_DIM)
                     tl = getattr(row, "_tag_lbl", None)   # 角标背景跟随
                     if tl is not None:
-                        tl.configure(bg=bg)
+                        self._anim_bg(tl, bg, steps=10, interval=18)
                     seg = getattr(row, "_seg_hi", None)   # 品牌渐变竖条
                     if seg is not None:
-                        seg.configure(bg=GRAD_HI if sel else GRS_BOT)
+                        self._anim_bg(seg, GRAD_HI if sel else GRS_BOT,
+                                      steps=10, interval=18)
             except Exception:
                 pass
 
