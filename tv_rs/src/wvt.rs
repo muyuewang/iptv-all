@@ -106,18 +106,28 @@ pub const MEDIA_EXT: [&str; 6] = [".m3u8", ".flv", ".ts", ".mp4", ".mkv", ".mpd"
 
 /// 判断某条线路是否「可直接播放」（不需要浏览器嗅探）。
 ///
-/// 对应 Python `is_direct_stream`：
+/// 对应 Python `is_direct_stream`，并额外覆盖官方源的 `eplay2.php` 转发口：
 /// - 去掉 query 后以媒体扩展名结尾
 /// - 或 URL 里含 `.m3u8`（形如转发口 `?url=...m3u8`）
+/// - 或含 `type=.flv`（官方源 HTTP-FLV 转发口，mpv 可直接硬解）
 pub fn is_direct_stream(url: &str) -> bool {
     if url.is_empty() {
         return false;
     }
+    let lower = url.to_lowercase();
     let base = url.split('?').next().unwrap_or("").to_lowercase();
     if MEDIA_EXT.iter().any(|ext| base.ends_with(ext)) {
         return true;
     }
-    url.to_lowercase().contains(".m3u8")
+    if lower.contains(".m3u8") {
+        return true;
+    }
+    // ★ 官方源 eplay2.php 转发口：`.../eplay2.php?token=...&p=0&type=.flv`
+    //   是 HTTP-FLV 流，mpv 可直接播。
+    if lower.contains("eplay2.php") && lower.contains("type=.flv") {
+        return true;
+    }
+    false
 }
 
 /// 一条线路（展平后的条目）

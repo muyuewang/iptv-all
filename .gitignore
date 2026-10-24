@@ -41,6 +41,12 @@ tv_rs/_*.png
 # 注意：根部的 `tools/_*` 含斜杠会被锚定到仓库根，管不到 tv_rs/tools/，须单列。
 tv_rs/tools/_*
 
+# ---------- Rust 端大文件（mpv 120MB 超 GitHub 单文件上限，伙伴按 README 现取）----------
+tv_rs/app/resources/mpv/mpv.exe
+tv_rs/app/resources/mpv/d3dcompiler_43.dll
+tv_rs/dist/
+tv_rs/target/
+
 # ---------- 调试残留 ----------
 # ★ 注意：Git 不支持「行尾注释」—— `_shots/   # 说明` 会被整行当成模式，
 #   结果就是什么都匹配不到。说明一律另起一行。

@@ -10,6 +10,7 @@
 
 pub mod base64x;
 pub mod core;
+pub mod net;
 pub mod wvt;
 
 /// 数据层版本（编译期从本 crate 的 Cargo.toml 取）。

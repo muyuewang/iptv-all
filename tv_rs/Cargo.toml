@@ -15,9 +15,14 @@ flate2 = "1.0"
 # Python 版手写 AES 是为了「零第三方依赖、不撑大 exe」；Rust 侧静态链接后体积可控。
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
-
-# 本包只做纯逻辑，不引入任何 GUI / Windows / 网络运行时依赖。
-# GUI 壳在 app/ 下（独立 crate），通过 workspace 共享 target 目录。
+# 真实网络抓取层（迁移 core.py 的 api_get/fetch_channels/fetch_play）。
+# ★ TLS 后端用 native-tls（Windows Schannel）：rustls 的 ring provider 在
+#   WebView2 进程里首次 TLS 握手会死锁（app 端实测），Schannel 是系统自带、无此问题。
+#   源站证书链不完整用 danger_accept_invalid_certs 放宽即可。
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "charset", "blocking"] }
+# 异步运行时（Tauri 也用 tokio，workspace 内版本对齐）
+# macros 供 #[tokio::main] 用；rt-multi-thread 供多线程调度。
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros"] }
 
 # ==================================================================
 # workspace

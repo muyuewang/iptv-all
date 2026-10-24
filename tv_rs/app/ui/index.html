@@ -130,8 +130,8 @@
       <div class="stage" id="stage">
         <div class="ph">
           <b>Pure TV · Rust</b>
-          <span>里程碑 1 · 播放区占位</span><br>
-          <span>选中左侧频道即可「播放」</span>
+          <span>选中左侧频道即可播放</span><br>
+          <span>直连线路由 mpv 内嵌硬解</span>
         </div>
       </div>
       <div class="info" id="info">数据层版本 —</div>
@@ -139,6 +139,15 @@
   </main>
 
 <script>
+  // ★ 顶部自检：不依赖 __TAURI__，先确认页面加载 + __TAURI__ 是否注入。
+  (function () {
+    try {
+      const flag = !!window.__TAURI__ && !!window.__TAURI__.core;
+      document.title = 'TV_' + (flag ? 'TAURI_OK' : 'TAURI_MISSING');
+    } catch (e) {
+      document.title = 'TV_TOP_ERR';
+    }
+  })();
   const { invoke } = window.__TAURI__.core;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -166,40 +175,84 @@
     }
   }
 
+  // 加载频道列表：同步命令直接返回（本 WebView2 环境只有同步 return 可靠，异步/轮询全失效）。
   async function loadChans() {
     const list = document.getElementById('chans');
     list.innerHTML = '<li class="dim">加载中…</li>';
     try {
       const chans = await invoke('list_channels', { tid: curTid });
-      if (!chans.length) {
-        list.innerHTML = '<li class="dim">（空）</li>';
-        return;
-      }
-      list.innerHTML = chans.map((c, i) =>
-        `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}">
-           <span class="idx">${i + 1}</span>
-           <span class="name">${esc(c.name)}</span>
-         </li>`
-      ).join('');
-      list.querySelectorAll('li').forEach((node) =>
-        node.addEventListener('click', () => {
-          list.querySelectorAll('li').forEach((n) => n.classList.remove('on'));
-          node.classList.add('on');
-          const name = node.dataset.name;
-          const stage = document.getElementById('stage');
-          stage.innerHTML =
-            `<div class="ph"><b>${esc(name)}</b>
-             <span>里程碑 1 · 播放占位（播放层后续里程碑接入）</span></div>`;
-        })
-      );
+      renderChans(chans);
     } catch (e) {
       list.innerHTML = `<li class="dim">加载失败：${esc(e)}</li>`;
     }
   }
 
+  // 渲染频道列表。
+  function renderChans(chans) {
+    const list = document.getElementById('chans');
+    if (!chans || !chans.length) {
+      list.innerHTML = '<li class="dim">（空）</li>';
+      return;
+    }
+    list.innerHTML = chans.map((c, i) =>
+      `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}">
+         <span class="idx">${i + 1}</span>
+         <span class="name">${esc(c.name)}</span>
+       </li>`
+    ).join('');
+    list.querySelectorAll('li').forEach((node) =>
+      node.addEventListener('click', () => {
+        list.querySelectorAll('li').forEach((n) => n.classList.remove('on'));
+        node.classList.add('on');
+        play(node.dataset.id, node.dataset.name);
+      })
+    );
+    // 自动化钩子：频道就绪后若设了 AUTOPLAY，播放第一个频道。
+    maybeAutoplay();
+  }
+
+  // 播放：同步命令直接返回结果（抓线路 + 起 mpv 同在命令内同步完成）。
+  async function play(id, name) {
+    const stage = document.getElementById('stage');
+    const info = document.getElementById('info');
+    stage.innerHTML =
+      `<div class="ph"><b>${esc(name)}</b><span>解析线路中…</span></div>`;
+    try {
+      const r = await invoke('play_channel', { tid: curTid, cid: id });
+      info.textContent = r.ok
+        ? `正在播放第 ${r.index + 1}/${r.total} 条线路`
+        : `播放失败：${r.msg || '无线路'}`;
+      stage.innerHTML = r.ok
+        ? `<div class="ph"><b>${esc(name)}</b><span>线路 ${r.index + 1}/${r.total} · mpv 已接管画面</span></div>`
+        : `<div class="ph"><b>${esc(name)}</b><span>播放失败</span></div>`;
+    } catch (e) {
+      info.textContent = `播放失败：${e}`;
+      stage.innerHTML =
+        `<div class="ph"><b>${esc(name)}</b><span>播放失败：${esc(e)}</span></div>`;
+    }
+  }
+
+  let autoplayFired = false;
+  async function maybeAutoplay() {
+    if (autoplayFired) return;
+    try {
+      const env = await invoke('env_flag');
+      if (env.autoplay) {
+        autoplayFired = true;
+        const first = document.querySelector('#chans li');
+        if (first) {
+          first.click();
+          invoke('self_check', { report: JSON.stringify({ autoplay: 'triggered', chan: first.dataset.name }) });
+        }
+      }
+    } catch (e) { console.error('autoplay 钩子失败', e); }
+  }
+
   async function boot() {
+    await invoke('self_check', { report: JSON.stringify({ boot: 'enter' }) });
     try {
       const info = await invoke('app_info');
+      await invoke('self_check', { report: JSON.stringify({ boot: 'app_info_ok' }) });
       document.getElementById('ver').textContent =
         `v${info.app_version} · core ${info.core_version} · ${info.profile}`;
       document.getElementById('info').textContent =
@@ -207,9 +260,18 @@
     } catch (e) {
       document.getElementById('ver').textContent = `IPC 失败: ${e}`;
     }
+    // 早期探针：确认 boot 入口 + IPC 通（release 无控制台，靠 self_check 落日志）
+    try {
+      await invoke('self_check', { report: JSON.stringify({ boot_start: true }) });
+    } catch (e) { console.error('boot_start 上报失败', e); }
 
+    await invoke('self_check', { report: JSON.stringify({ boot: 'before_loadCats' }) });
     await loadCats();
+    await invoke('self_check', { report: JSON.stringify({ boot: 'after_loadCats' }) });
     await loadChans();
+    try {
+      await invoke('self_check', { report: JSON.stringify({ loadchans_done: true }) });
+    } catch (e) { console.error('loadchans_done 上报失败', e); }
 
     // 启动自检：回传渲染状态，区分「真白屏」与「抓图失败」
     try {

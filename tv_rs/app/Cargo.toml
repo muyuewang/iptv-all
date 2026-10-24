@@ -10,9 +10,16 @@ license = "MIT"
 clean-tv-core = { path = ".." }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# 网络抓取（与 core 的 net 模块同款：native-tls/Schannel 放宽证书）
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "charset", "blocking"] }
+# 异步运行时（tauri command async 用；与 core 对齐版本）
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros"] }
 # Tauri 2 稳定线（2.12.x）。注意不要用 3.0.0-alpha：练手项目要踩稳，
 # 而且 Tauri 3 目前对外 API 仍在变动。
-tauri = { version = "2", features = [] }
+# ★ custom-protocol 必需：否则 WebviewUrl::App("index.html") 无法在运行时
+#   把嵌入的 frontendDist 资产（哈希命名 + brotli 压缩）解析出来 → 前端白屏。
+#   这是 release/debug 下「前端 boot() 不执行」的根因。
+tauri = { version = "2", features = ["custom-protocol"] }
 # ★ spike 专用：webview2-com 是 Tauri 在 Windows 上已经拉进来的依赖（0.39.1），
 #   `PlatformWebview::controller()` 返回的 `ICoreWebView2Controller` 正是这个 crate
 #   的类型。这里显式声明同版本，直接复用 Tauri 底层的 WebView2 COM 绑定，
@@ -23,6 +30,7 @@ webview2-com = "0.39"
 # ★ 必须与 webview2-com-sys 0.39.1 的 windows 依赖版本一致（0.62），
 #   否则 cargo 会同时编译两套不兼容的 windows crate，COM 指针类型对不上。
 windows = { version = "0.62", features = ["Win32_Foundation"] }
+ureq = "3.5.0"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
