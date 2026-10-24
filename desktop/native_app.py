@@ -2050,6 +2050,9 @@ class NativeApp:
         key = (str(c["tid"]), str(c["id"]))
         self._rows[key] = (row, name)
         row._sel = (key == self._sel_key)
+        # ★ v2.12.0 给行挂上参与 hover 高亮的组件引用，供 _row_hover_off 回退用
+        row._badge = badge
+        row._slot = slot
         if row._sel:
             for w in (row, slot, name) + ((tag_lbl,) if tag_lbl else ()):
                 w.configure(bg=SEL_GRAD_LO)
@@ -2063,28 +2066,73 @@ class NativeApp:
             w.bind("<Leave>", lambda e, r=row, n=name, b=badge, s=slot: self._row_hover(r, n, b, s, False))
 
     def _row_hover(self, row, name, badge, slot, on):
+        # ★ v2.12.0 快速滑动残影修复：hover 做「单热点 + 轻量高亮」。
+        #   ①② 共振根因：<Enter>/<Leave> 快速滑动时丢对上 + 整行变白反差太大。
+        #   修法：
+        #     1) 文字颜色**永不因 hover 改变**（只由选中态决定）——去掉发白残影；
+        #     2) hover 只微调底色一档（GRS_BOT→HOVER_BG），弱对比、残留也不扎眼；
+        #     3) 单热点：Enter 时先把上一个 hover 行退掉，保证同时最多一行高亮，
+        #        彻底消灭「快速划过留下一串半白行」。
+        if on:
+            prev = getattr(self, "_hover_row", None)
+            if prev is not None and prev is not row:
+                self._row_hover_off(prev)
+            self._hover_row = row
         sel = getattr(row, "_sel", False)
         base = SEL_GRAD_LO if sel else GRS_BOT
         bg = HOVER_BG if on else base
         for w in (row, name, badge, slot):
             try:
-                self._anim_bg(w, bg)
+                self._anim_bg(w, bg, steps=5, interval=12)
             except Exception:
                 pass
         tl = getattr(row, "_tag_lbl", None)     # 限免/VIP 角标背景跟随行
         if tl is not None:
             try:
-                self._anim_bg(tl, bg)
+                self._anim_bg(tl, bg, steps=5, interval=12)
             except Exception:
                 pass
-        # 品牌渐变竖条：选中态亮起红橙，hover 短暂保持，未选中维持底色（不可见）
+        # 品牌渐变竖条：选中态亮起红橙，未选中维持底色（hover 不再点亮竖条，
+        # 避免快速滑动时竖条跟着闪）
         seg = getattr(row, "_seg_hi", None)
         if seg is not None:
             try:
-                self._anim_bg(seg, GRAD_HI if (sel or on) else GRS_BOT)
+                self._anim_bg(seg, GRAD_HI if sel else GRS_BOT, steps=5, interval=12)
             except Exception:
                 pass
-        name.configure(fg=FG if (on or sel) else FG_DIM)
+        # 文字色只由选中态决定；hover 不再改字体颜色（去残影的关键）
+        name.configure(fg=FG if sel else FG_DIM)
+
+    def _row_hover_off(self, row):
+        """把一个已经不处于 hover 的行退回到其「选中态底色」。"""
+        name = None
+        for (r, n) in getattr(self, "_rows", {}).values():
+            if r is row:
+                name = n
+                break
+        sel = getattr(row, "_sel", False)
+        base = SEL_GRAD_LO if sel else GRS_BOT
+        badge = getattr(row, "_badge", None)
+        slot = getattr(row, "_slot", None)
+        tl = getattr(row, "_tag_lbl", None)
+        for w in (row, name, badge, slot, tl):
+            if w is None:
+                continue
+            try:
+                self._anim_bg(w, base, steps=5, interval=12)
+            except Exception:
+                pass
+        seg = getattr(row, "_seg_hi", None)
+        if seg is not None:
+            try:
+                self._anim_bg(seg, GRAD_HI if sel else GRS_BOT)
+            except Exception:
+                pass
+        if name is not None:
+            try:
+                name.configure(fg=FG if sel else FG_DIM)
+            except Exception:
+                pass
 
     def _anim_bg(self, widget, target, steps=8, interval=14):
         """把 widget 底色从当前值平滑补间到 target。
