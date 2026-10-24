@@ -162,6 +162,22 @@ BRAND2 = "#ff6b35"
 SEL_BG = "#2b171c"              # 频道列表选中行底色（品牌红的暗调）
 GOLD = "#ffc531"
 
+# ★ v2.12.0 现代化视觉：玻璃拟态 + 品牌渐变
+#   — 面板底色由「纯黑平涂」改为有层次的深蓝黑（顶部略亮、底部更深），
+#     加 1px 亮描边分隔，摆脱平铺的「复古感」。
+#   — 品牌红橙渐变贯穿选中态 / logo / 播放中的频道名。
+GRS_TOP = "#181a24"             # 玻璃面板顶部（略亮）
+GRS_MID = "#12141c"             # 玻璃面板中部
+GRS_BOT = "#0c0d13"             # 玻璃面板底部（更深）
+GRS_LINE = "#2c3040"            # 玻璃面板亮描边（比 LINE 更亮一档）
+GRS_LINE_DIM = "#21242f"        # 分隔线（柔和）
+# 品牌渐变端点（与 BRAND/BRAND2 一致，契合现有红橙主线）
+GRAD_HI = "#ff4d6d"             # 渐变亮端
+GRAD_LO = "#ff6b35"             # 渐变橙端
+SEL_GRAD_HI = "#2e1b22"         # 选中行渐变（亮端，略偏红）
+SEL_GRAD_LO = "#241016"         # 选中行渐变（暗端）
+HOVER_BG = "#1f2331"            # hover 过渡色（略亮于玻璃面板）
+
 # 台标缩略尺寸
 LOGO_SIZE = 30
 
@@ -1182,14 +1198,14 @@ class NativeApp:
         """顶栏最右上角的最小化 / 最大化 / 关闭（自绘，仅 Windows）。"""
         if not IS_WIN:
             return
-        self.wbtn_bar = bar = tk.Frame(top, bg=BG)
+        self.wbtn_bar = bar = tk.Frame(top, bg=GRS_MID)
         bar.pack(side="right", padx=(2, 0))
         ifam = self._icon_font() or self.font_family
         for key in ("min", "max", "close"):
-            cell = tk.Frame(bar, bg=BG, width=44, height=34)
+            cell = tk.Frame(bar, bg=GRS_MID, width=44, height=34)
             cell.pack(side="left")
             cell.pack_propagate(False)      # 不加会按字形收缩，悬停底色忽宽忽窄
-            ic = tk.Label(cell, text=self._glyph(key), bg=BG, fg=FG_DIM,
+            ic = tk.Label(cell, text=self._glyph(key), bg=GRS_MID, fg=FG_DIM,
                           font=(ifam, 10), cursor="hand2")
             ic.place(relx=0.5, rely=0.5, anchor="center")
             for w in (cell, ic):            # 内外都绑：鼠标移到字形上父控件会 Leave
@@ -1204,9 +1220,9 @@ class NativeApp:
             return
         cell, ic = it
         if key == "close":                  # 关闭键悬停 = Windows 惯例的红底白叉
-            bg, fg = ("#e81123", "#ffffff") if on else (BG, FG_DIM)
+            bg, fg = ("#e81123", "#ffffff") if on else (GRS_MID, FG_DIM)
         else:
-            bg, fg = (BG3, FG) if on else (BG, FG_DIM)
+            bg, fg = (BG3, FG) if on else (GRS_MID, FG_DIM)
         try:
             cell.configure(bg=bg)
             ic.configure(bg=bg, fg=fg)
@@ -1375,15 +1391,18 @@ class NativeApp:
     # ---------------- UI 构建 ----------------
     def _build_ui(self):
         # 顶栏
-        top = self.top_bar = tk.Frame(self.root, bg=BG, height=58)
+        top = self.top_bar = tk.Frame(self.root, bg=GRS_MID, height=58)
         top.pack(fill="x", side="top")
         top.pack_propagate(False)
+        # 顶栏底边 1px 亮描边：玻璃拟态的分界线（高级感关键）
+        top_line = tk.Frame(self.root, bg=GRS_LINE_DIM, height=1)
+        top_line.pack(fill="x", side="top")
         # ★ v2.10.33 沉浸式：系统标题栏没了，logo + 标题这一小段（纯装饰）由
         #   _bind_drag 绑成可拖动的「标题栏」（见 _attach_immersive）。
-        self.logo_lbl = tk.Label(top, text="● ", bg=BG, fg=BRAND,
+        self.logo_lbl = tk.Label(top, text="● ", bg=GRS_MID, fg=BRAND,
                                  font=self.F(12, True))
         self.logo_lbl.pack(side="left", padx=(16, 0), pady=14)
-        self.title_lbl = tk.Label(top, text="纯净电视直播", bg=BG, fg=FG,
+        self.title_lbl = tk.Label(top, text="纯净电视直播", bg=GRS_MID, fg=FG,
                                   font=self.F(14, True))
         self.title_lbl.pack(side="left", pady=14)
 
@@ -1398,24 +1417,27 @@ class NativeApp:
         #   pack 的靠左」，晚一步它就排到状态文案左边去了（实测踩过）。
         self._build_window_buttons(top)
 
-        self.status_lbl = tk.Label(top, text="", bg=BG, fg=FG_MUTE, font=self.F(9))
+        self.status_lbl = tk.Label(top, text="", bg=GRS_MID, fg=FG_MUTE, font=self.F(9))
         self.status_lbl.pack(side="right", padx=(8, 12))
 
-        self.settings_btn = tk.Button(top, text="⚙ 设置", bg=BG2, fg=FG_DIM,
+        self.settings_btn = tk.Button(top, text="⚙ 设置", bg=GRS_LINE_DIM, fg=FG_DIM,
                                       relief="flat", bd=0, padx=12, pady=6,
-                                      activebackground=BRAND2, activeforeground="#fff",
+                                      activebackground=GRAD_HI, activeforeground="#fff",
                                       font=self.F(10), cursor="hand2",
                                       command=self._open_settings)
         self.settings_btn.pack(side="right", padx=6, pady=12)
 
-        # 主体
-        body = self.body = tk.Frame(self.root, bg=BG)
+        # 主体（玻璃拟态：顶部略亮、底部更深，由左右两栏各自底色分层）
+        body = self.body = tk.Frame(self.root, bg=GRS_MID)
         body.pack(fill="both", expand=True)
 
-        # 左侧
-        left = self.left_panel = tk.Frame(body, bg=BG, width=344)
+        # 左侧（分类/分组选择器区用玻璃顶部色，列表区保持深色以突出频道行）
+        left = self.left_panel = tk.Frame(body, bg=GRS_TOP, width=344)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
+        # 左/右栏之间的 1px 亮描边（玻璃面板分隔线）
+        self.body_line = tk.Frame(body, bg=GRS_LINE_DIM, width=1)
+        self.body_line.pack(side="left", fill="y")
 
         # ★ v2.10.34：分类 / 分组选择器**回到频道列表正上方**（左栏首行）。
         #   v2.10.31 曾把它塞进顶栏（想让顶栏左段充当左栏头部），但用户实际
@@ -1424,22 +1446,22 @@ class NativeApp:
         #   窄窗时也不再跟状态文案抢位置。
         #   高度锁死（pack_propagate(False)）+ fill="x"：宽度随左栏，下拉按
         #   winfo_width 自绘，<Configure> 会重画，不会画成竖条。
-        self.filter_slot = tk.Frame(left, bg=BG, height=40)
+        self.filter_slot = tk.Frame(left, bg=GRS_TOP, height=40)
         self.filter_slot.pack(fill="x", padx=12, pady=(12, 6))
         self.filter_slot.pack_propagate(False)
 
         # 本机源：分类选择器（★ v2.10.22 按用户要求改回**下拉** —— 与官网源的
         #   「分组」共用同一个 DropSelect，两个模式点上去长得一模一样）
-        self.catf = tk.Frame(self.filter_slot, bg=BG)
-        tk.Label(self.catf, text="分类", bg=BG, fg=FG_MUTE,
+        self.catf = tk.Frame(self.filter_slot, bg=GRS_TOP)
+        tk.Label(self.catf, text="分类", bg=GRS_TOP, fg=FG_MUTE,
                  font=self.F(9)).pack(side="left", padx=(0, 8))
         self.cat_bar = DropSelect(self.catf, font=self.F(10), height=36,
                                   on_pick=self._on_cat_pick)
         self.cat_bar.pack(side="left", fill="x", expand=True)
 
         # 官网源：分组选择器（51 个分组，下拉面板自带内部滚动 MAX_ROWS=10）
-        self.group_frame = tk.Frame(self.filter_slot, bg=BG)
-        tk.Label(self.group_frame, text="分组", bg=BG, fg=FG_MUTE,
+        self.group_frame = tk.Frame(self.filter_slot, bg=GRS_TOP)
+        tk.Label(self.group_frame, text="分组", bg=GRS_TOP, fg=FG_MUTE,
                  font=self.F(9)).pack(side="left", padx=(0, 8))
         self.group_cbo = DropSelect(self.group_frame, font=self.F(10), height=36,
                                     on_pick=self._on_group_pick)
@@ -1453,13 +1475,13 @@ class NativeApp:
         #   是空的（顶栏那段 248px 空白 / 现在左栏那条空行就是这么来的）。
         self._show_filter("cat")
 
-        listwrap = tk.Frame(left, bg=BG)
+        listwrap = tk.Frame(left, bg=GRS_BOT)
         listwrap.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(listwrap, bg=BG, highlightthickness=0)
+        self.canvas = tk.Canvas(listwrap, bg=GRS_BOT, highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(listwrap, orient="vertical",
                                        style="Dark.Vertical.TScrollbar",
                                        command=self.canvas.yview)
-        self.chan_frame = tk.Frame(self.canvas, bg=BG)
+        self.chan_frame = tk.Frame(self.canvas, bg=GRS_BOT)
         self._win = self.canvas.create_window((0, 0), window=self.chan_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         self.canvas.pack(side="left", fill="both", expand=True)
@@ -1544,23 +1566,23 @@ class NativeApp:
                                    highlightthickness=0)
         self._load_bar.pack()
 
-        # EPG 节目单条
-        self.epg_bar = tk.Frame(right, bg=BG2, height=118)
+        # EPG 节目单条（玻璃拟态面板色，与顶栏/控制条统一）
+        self.epg_bar = tk.Frame(right, bg=GRS_MID, height=118)
         epg_bar = self.epg_bar
         epg_bar.pack_propagate(False)
-        epg_head = tk.Frame(epg_bar, bg=BG2)
+        epg_head = tk.Frame(epg_bar, bg=GRS_MID)
         epg_head.pack(fill="x", padx=12, pady=(8, 2))
-        self.epg_title = tk.Label(epg_head, text="节目单", bg=BG2, fg=FG,
+        self.epg_title = tk.Label(epg_head, text="节目单", bg=GRS_MID, fg=FG,
                                   font=self.F(10, True))
         self.epg_title.pack(side="left")
-        self.epg_now = tk.Label(epg_head, text="", bg=BG2, fg=BRAND2, font=self.F(10))
+        self.epg_now = tk.Label(epg_head, text="", bg=GRS_MID, fg=BRAND2, font=self.F(10))
         self.epg_now.pack(side="left", padx=10)
-        tk.Button(epg_head, text="✕", bg=BG2, fg=FG_MUTE, relief="flat", bd=0,
+        tk.Button(epg_head, text="✕", bg=GRS_MID, fg=FG_MUTE, relief="flat", bd=0,
                   font=self.F(10), cursor="hand2", command=self._toggle_epg,
                   activebackground=BG3, activeforeground=FG).pack(side="right")
-        self.epg_canvas = tk.Canvas(epg_bar, bg=BG2, highlightthickness=0, height=76)
+        self.epg_canvas = tk.Canvas(epg_bar, bg=GRS_MID, highlightthickness=0, height=76)
         self.epg_canvas.pack(fill="x", padx=12, pady=(0, 8))
-        self.epg_inner = tk.Frame(self.epg_canvas, bg=BG2)
+        self.epg_inner = tk.Frame(self.epg_canvas, bg=GRS_MID)
         self._epg_win = self.epg_canvas.create_window((0, 0), window=self.epg_inner,
                                                       anchor="nw")
         self.epg_inner.bind("<Configure>", lambda e: self.epg_canvas.configure(
@@ -1568,27 +1590,30 @@ class NativeApp:
         self.epg_canvas.bind("<MouseWheel>", self._on_epg_wheel)
         epg_bar.pack_forget()   # 默认收起
 
-        # 底部控制条
-        ctrl = self.ctrl_bar = tk.Frame(self.root, bg=BG2, height=74)
+        # 底部控制条（玻璃拟态面板色，与顶栏统一）
+        ctrl = self.ctrl_bar = tk.Frame(self.root, bg=GRS_MID, height=74)
         ctrl.pack(fill="x", side="bottom")
         ctrl.pack_propagate(False)
-        info = tk.Frame(ctrl, bg=BG2)
+        # 控制条顶边 1px 亮描边，与顶栏底边呼应
+        self.ctrl_line = tk.Frame(self.root, bg=GRS_LINE_DIM, height=1)
+        self.ctrl_line.pack(fill="x", side="bottom")
+        info = tk.Frame(ctrl, bg=GRS_MID)
         info.pack(side="left", fill="y", padx=16)
-        self.chan_name_lbl = tk.Label(info, text="—", bg=BG2, fg=FG,
+        self.chan_name_lbl = tk.Label(info, text="—", bg=GRS_MID, fg=GRAD_HI,
                                       font=self.F(13, True), anchor="w")
         self.chan_name_lbl.pack(anchor="w", pady=(16, 0))
-        sub = tk.Frame(info, bg=BG2)
+        sub = tk.Frame(info, bg=GRS_MID)
         sub.pack(anchor="w")
-        self.line_lbl = tk.Label(sub, text="", bg=BG2, fg=FG_DIM, font=self.F(9))
+        self.line_lbl = tk.Label(sub, text="", bg=GRS_MID, fg=FG_DIM, font=self.F(9))
         self.line_lbl.pack(side="left")
         self.hw_lbl = tk.Label(sub, text=("· GPU 硬解" if self.mpv else "· 未检测到 mpv"),
-                               bg=BG2, fg=FG_MUTE, font=self.F(9))
+                               bg=GRS_MID, fg=FG_MUTE, font=self.F(9))
         self.hw_lbl.pack(side="left", padx=6)
 
         # 右侧按钮（从右往左 pack）
         def mkbtn(text, cmd, w=None, fg=FG):
-            b = tk.Button(ctrl, text=text, bg=BG2, fg=fg, relief="flat", bd=0,
-                          padx=12, pady=8, activebackground=BRAND,
+            b = tk.Button(ctrl, text=text, bg=GRS_MID, fg=fg, relief="flat", bd=0,
+                          padx=12, pady=8, activebackground=GRAD_HI,
                           activeforeground="#fff", font=self.F(10), cursor="hand2",
                           command=cmd)
             b.pack(side="right", padx=4, pady=20)
@@ -1600,12 +1625,12 @@ class NativeApp:
         mkbtn("⏮ 上一线路", self._prev_line)
 
         # 画面比例
-        self.ratio_btn = tk.Menubutton(ctrl, text="画面 适应 ▾", bg=BG2, fg=FG,
+        self.ratio_btn = tk.Menubutton(ctrl, text="画面 适应 ▾", bg=GRS_MID, fg=FG,
                                        relief="flat", bd=0, padx=10, pady=8,
                                        activebackground=BG3, activeforeground=FG,
                                        font=self.F(10), cursor="hand2")
         menu = tk.Menu(self.ratio_btn, tearoff=0, bg=BG3, fg=FG,
-                       activebackground=BRAND, activeforeground="#fff", bd=0)
+                       activebackground=GRAD_HI, activeforeground="#fff", bd=0)
         for r in ("适应", "铺满", "16:9", "4:3"):
             menu.add_command(label=r, command=lambda r=r: self._set_ratio(r))
         self.ratio_btn.configure(menu=menu)
@@ -1614,9 +1639,9 @@ class NativeApp:
         # 音量
         self.mute_btn = mkbtn("🔊", self._toggle_mute)
         self.vol_scale = tk.Scale(ctrl, from_=0, to=100, orient="horizontal",
-                                  bg=BG2, fg=FG_DIM, troughcolor=BG3,
+                                  bg=GRS_MID, fg=FG_DIM, troughcolor=BG3,
                                   highlightthickness=0, bd=0, showvalue=False,
-                                  activebackground=BRAND, length=110,
+                                  activebackground=GRAD_HI, length=110,
                                   command=self._on_volume)
         self.vol_scale.set(100)
         self.vol_scale.pack(side="right", padx=2, pady=20)
@@ -1947,7 +1972,7 @@ class NativeApp:
         self._clear(self.chan_frame)
         self._rows = {}
         if not chans:
-            tk.Label(self.chan_frame, text="（空）", bg=BG, fg=FG_MUTE,
+            tk.Label(self.chan_frame, text="（空）", bg=GRS_BOT, fg=FG_MUTE,
                      font=self.F(10)).pack(pady=20)
             return
         for c in chans:
@@ -1959,7 +1984,7 @@ class NativeApp:
         row.pack(fill="x", padx=8, pady=2)
 
         # 台标槽
-        slot = tk.Frame(row, bg=BG, width=LOGO_SIZE + 4, height=LOGO_SIZE + 4)
+        slot = tk.Frame(row, bg=GRS_BOT, width=LOGO_SIZE + 4, height=LOGO_SIZE + 4)
         slot.pack(side="left", padx=(4, 8), pady=2)
         slot.pack_propagate(False)
         badge = tk.Label(slot, text=(c["name"][:1] if c["name"] else "?"),
@@ -1976,19 +2001,19 @@ class NativeApp:
             try:
                 if not badge.winfo_exists():
                     return
-                badge.configure(image=img, text="", bg=BG)
+                badge.configure(image=img, text="", bg=GRS_BOT)
                 badge.image = img
             except Exception:
                 pass
 
         self.logo_store.request(url, on_logo)
 
-        name = tk.Label(row, text=c["name"], bg=BG, fg=FG_DIM, font=self.F(10),
+        name = tk.Label(row, text=c["name"], bg=GRS_BOT, fg=FG_DIM, font=self.F(10),
                         anchor="w")
         name.pack(side="left", fill="x", expand=True)
 
         is_fav = any(f["tid"] == c["tid"] and f["id"] == c["id"] for f in self.fav)
-        star = tk.Label(row, text="★" if is_fav else "☆", bg=BG,
+        star = tk.Label(row, text="★" if is_fav else "☆", bg=GRS_BOT,
                         fg=GOLD if is_fav else FG_MUTE, font=self.F(11), cursor="hand2")
 
         def togg(e, c=c):
@@ -2002,10 +2027,18 @@ class NativeApp:
         tag_lbl = None
         if c.get("tag") in ("vip", "mianfei"):
             vip = c["tag"] == "vip"
-            tag_lbl = tk.Label(row, text="VIP" if vip else "限免", bg=BG,
+            tag_lbl = tk.Label(row, text="VIP" if vip else "限免", bg=GRS_BOT,
                                fg=(GOLD if vip else "#3ddc84"),
                                font=self.F(8, True), cursor="hand2")
             tag_lbl.pack(side="right", padx=(0, 7))
+
+        # ★ 品牌渐变竖条：选中行左侧 3px 红橙竖条，作为「正在播放」的视觉锚点。
+        #   Tk 无真渐变，用上段品牌红 + 下段品牌橙叠出近似渐变。
+        bar = tk.Frame(row, bg=GRS_BOT, width=3)
+        bar.pack(side="left", fill="y", padx=(0, 0))
+        seg_hi = tk.Frame(bar, bg=GRAD_HI)
+        seg_hi.pack(fill="both", expand=True)
+        row._seg_hi = seg_hi
 
         widgets = (row, slot, badge, name)
         if tag_lbl is not None:
@@ -2016,8 +2049,11 @@ class NativeApp:
         row._sel = (key == self._sel_key)
         if row._sel:
             for w in (row, slot, name) + ((tag_lbl,) if tag_lbl else ()):
-                w.configure(bg=SEL_BG)
+                w.configure(bg=SEL_GRAD_LO)
+            seg_hi.configure(bg=GRAD_HI)
             name.configure(fg=FG)
+        else:
+            seg_hi.configure(bg=GRS_BOT)   # 未选中时竖条与行底色融合（不可见）
         for w in widgets:
             w.bind("<Button-1>", lambda e, c=c: self._open_channel(c["tid"], c["id"], c["name"]))
             w.bind("<Enter>", lambda e, r=row, n=name, b=badge, s=slot: self._row_hover(r, n, b, s, True))
@@ -2025,8 +2061,8 @@ class NativeApp:
 
     def _row_hover(self, row, name, badge, slot, on):
         sel = getattr(row, "_sel", False)
-        base = SEL_BG if sel else BG
-        bg = BG3 if on else base
+        base = SEL_GRAD_LO if sel else GRS_BOT
+        bg = HOVER_BG if on else base
         for w in (row, name, badge, slot):
             try:
                 w.configure(bg=bg)
@@ -2036,6 +2072,13 @@ class NativeApp:
         if tl is not None:
             try:
                 tl.configure(bg=bg)
+            except Exception:
+                pass
+        # 品牌渐变竖条：选中态亮起红橙，hover 短暂保持，未选中维持底色（不可见）
+        seg = getattr(row, "_seg_hi", None)
+        if seg is not None:
+            try:
+                seg.configure(bg=GRAD_HI if (sel or on) else GRS_BOT)
             except Exception:
                 pass
         name.configure(fg=FG if (on or sel) else FG_DIM)
@@ -2513,7 +2556,7 @@ class NativeApp:
             self._next_channel()
 
         b1 = tk.Button(btns, text="重试该频道", command=do_retry,
-                       bg=BG3, fg=FG, activebackground=SEL_BG,
+                       bg=BG3, fg=FG, activebackground=SEL_GRAD_LO,
                        activeforeground=FG, relief="flat",
                        padx=14, pady=4, cursor="hand2",
                        font=self.F(10), bd=0)
@@ -3010,7 +3053,7 @@ class NativeApp:
 
     # ---------------- 选中高亮 ----------------
     def _mark_selected(self):
-        """给「点没点上」一个明确的视觉反馈：选中行用品牌暗红底。"""
+        """给「点没点上」一个明确的视觉反馈：选中行用品牌暗红底 + 红橙竖条。"""
         key = (str(self.cur.get("tid")), str(self.cur.get("id")))
         self._sel_key = key
         for k, (row, name) in self._rows.items():
@@ -3018,12 +3061,15 @@ class NativeApp:
             try:
                 if getattr(row, "_sel", False) != sel:
                     row._sel = sel
-                    bg = SEL_BG if sel else BG
+                    bg = SEL_GRAD_LO if sel else GRS_BOT
                     row.configure(bg=bg)
                     name.configure(bg=bg, fg=FG if sel else FG_DIM)
                     tl = getattr(row, "_tag_lbl", None)   # 角标背景跟随
                     if tl is not None:
                         tl.configure(bg=bg)
+                    seg = getattr(row, "_seg_hi", None)   # 品牌渐变竖条
+                    if seg is not None:
+                        seg.configure(bg=GRAD_HI if sel else GRS_BOT)
             except Exception:
                 pass
 
