@@ -232,11 +232,21 @@ def decrypt_page(html, tid, cid):
         s0 = b64d(opts[0][::-1])
         if not s0:
             return [], "解码失败"
-        url0 = "%s/eplay2.php?token=%s&tid=%s&id=%s&p=0&type=.flv" % (API, old, tid, cid)
-        out0 = b64e(url0)
-        if len(s0) != len(out0):
+        # ★ 修复（v2.10.50）：源站对部分频道（湖南/广州系、CCTV 付费频道、CETV、
+        #   地方卫视、港澳台卫视等）的第一条线路明文 URL 少了 `&type=.flv` 后缀，
+        #   导致标准 url0 的 base64 长度（136）与密文长度（124）对不上。这里按
+        #   候选模板逐个比对长度，命中即反推 key。
+        key = None
+        for tmpl in (
+            "%s/eplay2.php?token=%s&tid=%s&id=%s&p=0&type=.flv" % (API, old, tid, cid),
+            "%s/eplay2.php?token=%s&tid=%s&id=%s&p=0" % (API, old, tid, cid),
+        ):
+            out0 = b64e(tmpl)
+            if len(s0) == len(out0):
+                key = [ord(s0[j]) ^ ord(out0[j]) for j in range(len(s0))]
+                break
+        if key is None:
             return [], "密钥长度不符"
-        key = [ord(s0[j]) ^ ord(out0[j]) for j in range(len(s0))]
 
         urls = []
         for opt in opts:

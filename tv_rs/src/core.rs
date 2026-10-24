@@ -176,24 +176,33 @@ pub fn decrypt_page(html: &str, tid: &str, cid: &str, api: &str) -> DecryptResul
         Some(v) => v,
         None => return fail("解码失败"),
     };
-    //    url0 = f"{api}/eplay2.php?token={old}&tid={tid}&id={cid}&p=0&type=.flv"
-    let url0 = format!(
-        "{}/eplay2.php?token={}&tid={}&id={}&p=0&type=.flv",
-        api.trim_end_matches('/'),
-        old,
-        tid,
-        cid
-    );
-    let out0 = b64e(url0.as_bytes());
-    if s0.len() != out0.len() {
-        return fail("密钥长度不符");
+    // ★ 修复（v2.10.50）：源站对部分频道（湖南/广州系、CCTV 付费频道、CETV、
+    //   地方卫视、港澳台卫视等）的第一条线路明文 URL **少了 `&type=.flv` 后缀**，
+    //   导致标准 url0 的 base64 长度（136）与密文长度（124）对不上，XOR key 反推
+    //   失败（报「密钥长度不符」）。这里按候选模板逐个比对长度，命中即用。
+    //   候选①：标准带 .flv（成功频道用）；候选②：无 .flv（失败频道用）。
+    let api_trim = api.trim_end_matches('/');
+    let mut key: Option<Vec<u8>> = None;
+    for tmpl in [
+        format!("{api_trim}/eplay2.php?token={old}&tid={tid}&id={cid}&p=0&type=.flv"),
+        format!("{api_trim}/eplay2.php?token={old}&tid={tid}&id={cid}&p=0"),
+    ] {
+        let out0 = b64e(tmpl.as_bytes());
+        if s0.len() == out0.len() {
+            //    key[j] = ord(s0[j]) ^ ord(out0[j])
+            key = Some(
+                s0.iter()
+                    .zip(out0.as_bytes().iter())
+                    .map(|(a, b)| a ^ b)
+                    .collect(),
+            );
+            break;
+        }
     }
-    //    key[j] = ord(s0[j]) ^ ord(out0[j])
-    let key: Vec<u8> = s0
-        .iter()
-        .zip(out0.as_bytes().iter())
-        .map(|(a, b)| a ^ b)
-        .collect();
+    let key = match key {
+        Some(k) => k,
+        None => return fail("密钥长度不符"),
+    };
 
     // 5) 逐条解密
     let mut urls: Vec<String> = Vec::new();
