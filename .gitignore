@@ -31,6 +31,15 @@ tv_rs/target/
 # 增量编译缓存
 tv_rs/**/*.rs.bk
 tv_rs/**/*.pdb
+# tauri-build 生成的 schema（随 tauri 版本自动重建，无需入库）
+tv_rs/app/gen/
+# 探针产出：运行日志与截图（_verify_app.py / _shot_*.py 等一次性脚本产生）
+tv_rs/_*.log
+tv_rs/_*.txt
+tv_rs/_*.png
+# 开发期一次性探针脚本（沿用仓库既有约定：tools/_* 本地保留不入库）
+# 注意：根部的 `tools/_*` 含斜杠会被锚定到仓库根，管不到 tv_rs/tools/，须单列。
+tv_rs/tools/_*
 
 # ---------- 调试残留 ----------
 # ★ 注意：Git 不支持「行尾注释」—— `_shots/   # 说明` 会被整行当成模式，

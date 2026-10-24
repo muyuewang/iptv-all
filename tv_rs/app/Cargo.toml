@@ -1,0 +1,27 @@
+[package]
+name = "clean-tv-app"
+version = "0.1.0"
+edition = "2021"
+description = "纯净电视 · Tauri 壳（里程碑 0：验证 MSVC + WebView2 + 数据层打通）"
+license = "MIT"
+
+[dependencies]
+# 数据层（纯逻辑，无 GUI 依赖）
+clean-tv-core = { path = ".." }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Tauri 2 稳定线（2.12.x）。注意不要用 3.0.0-alpha：练手项目要踩稳，
+# 而且 Tauri 3 目前对外 API 仍在变动。
+tauri = { version = "2", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# Tauri 在 Windows 上要求 GUI 子系统（否则会多弹一个控制台窗口）。
+# debug 构建也这样设，方便直接双击 exe 看效果。
+[[bin]]
+name = "clean-tv-app"
+path = "src/main.rs"
+
+# 注意：[profile.*] 在 workspace 成员里会被 cargo 忽略（只有根 Cargo.toml 的
+# profile 生效），所以优化配置统一写在 ../Cargo.toml 的 [profile.dev.package."*"]。

@@ -16,5 +16,38 @@ flate2 = "1.0"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 
-# 本里程碑（数据层）只做纯逻辑，不引入任何 GUI / Windows / 网络运行时依赖。
-# 后续里程碑会按需加入：reqwest（HTTP）、tokio（异步）、tauri（GUI 壳）。
+# 本包只做纯逻辑，不引入任何 GUI / Windows / 网络运行时依赖。
+# GUI 壳在 app/ 下（独立 crate），通过 workspace 共享 target 目录。
+
+# ==================================================================
+# workspace
+# ==================================================================
+# 采用「root package + workspace」的混合写法：本 Cargo.toml 既是
+# clean-tv-core 这个包，也是 workspace 根。好处是数据层的 src/ 不必
+# 搬家（保持已有 git 历史和上面的文档注释路径不变），只需把 app/
+# 挂进来即可共享依赖解析与 target 目录。
+#
+# 目录结构：
+#   tv_rs/Cargo.toml       <- 本文件（core 包 + workspace 根）
+#   tv_rs/src/             <- 数据层（无 GUI）
+#   tv_rs/tests/           <- 与 Python 的对拍测试
+#   tv_rs/app/             <- Tauri 壳（GUI）
+[workspace]
+members = ["app"]
+# app 里的依赖（tauri 全家桶）解析结果与 core 无关，
+# 但共享 target 能省一份增量编译缓存。
+resolver = "2"
+
+[workspace.dependencies]
+# 数据层对外暴露的类型都基于 serde，GUI 侧复用同一版本避免类型不兼容
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# ==================================================================
+# profile（必须在 workspace 根，写在成员 crate 里会被忽略）
+# ==================================================================
+# tauri 依赖树很深，dev 构建若对依赖全不做优化会明显拖慢启动；
+# 对第三方依赖单独开 opt-level=2，自己的代码仍保持 0 以便快速迭代。
+# 这是 Tauri 官方的推荐配置。
+[profile.dev.package."*"]
+opt-level = 2

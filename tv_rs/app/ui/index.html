@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>纯净电视 · Rust 里程碑 0</title>
+<style>
+  :root {
+    --bg-top: #181a24;
+    --bg-mid: #12141c;
+    --bg-bot: #0c0d13;
+    --line: #2a2f3d;
+    --fg: #e8ecf5;
+    --fg-dim: #8f97a8;
+    --hi: #ff4d6d;
+    --lo: #ff6b35;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: linear-gradient(180deg, var(--bg-top), var(--bg-mid) 45%, var(--bg-bot));
+    color: var(--fg);
+    font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  body { display: flex; flex-direction: column; padding: 28px 32px; gap: 18px; }
+  h1 {
+    margin: 0; font-size: 20px; font-weight: 600; letter-spacing: .3px;
+    background: linear-gradient(90deg, var(--hi), var(--lo));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { color: var(--fg-dim); font-size: 12.5px; margin-top: -10px; }
+  .card {
+    border: 1px solid var(--line); border-radius: 12px;
+    background: rgba(255,255,255,.025);
+    padding: 16px 18px;
+  }
+  .card h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--fg-dim);
+    text-transform: uppercase; letter-spacing: .8px; }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 14px; font-size: 13px; }
+  .kv dt { color: var(--fg-dim); }
+  .kv dd { margin: 0; font-family: ui-monospace, Consolas, monospace; }
+  ul { margin: 0; padding-left: 0; list-style: none; }
+  li {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-radius: 8px; margin-bottom: 6px;
+    background: rgba(255,255,255,.03); border: 1px solid transparent;
+  }
+  li:hover { border-color: var(--line); }
+  .idx {
+    width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto;
+    display: grid; place-items: center;
+    font-size: 11px; font-family: ui-monospace, monospace;
+    background: linear-gradient(135deg, var(--hi), var(--lo)); color: #fff;
+  }
+  .ok { color: #3ddc97; }
+  .err { color: var(--hi); }
+  #status { margin-left: auto; font-size: 12px; color: var(--fg-dim); }
+</style>
+</head>
+<body>
+  <h1>纯净电视 · Rust 里程碑 0</h1>
+  <div class="sub">验证 MSVC + WebView2 链接、workspace 依赖、serde 跨 IPC 传值</div>
+
+  <div class="card">
+    <h2>运行环境</h2>
+    <dl class="kv" id="env"><dt>加载中…</dt><dd></dd></dl>
+  </div>
+
+  <div class="card">
+    <h2>数据层实跑（clean-tv-core::parse_channels）</h2>
+    <ul id="chans"><li>加载中…</li></ul>
+    <div id="status"></div>
+  </div>
+
+<script>
+  const { invoke } = window.__TAURI__.core;
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  (async () => {
+    try {
+      const info = await invoke('app_info');
+      document.getElementById('env').innerHTML = Object.entries({
+        '应用': info.app,
+        '应用版本': info.app_version,
+        '数据层版本': info.core_version,
+        '编译目标': info.target,
+        '构建配置': info.profile,
+      }).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+    } catch (e) {
+      document.getElementById('env').innerHTML =
+        `<dt class="err">IPC 失败</dt><dd class="err">${esc(e)}</dd>`;
+    }
+
+    try {
+      const chans = await invoke('demo_channels');
+      document.getElementById('chans').innerHTML = chans.map((c, i) =>
+        `<li><span class="idx">${i + 1}</span>
+             <span>${esc(c.name)}</span>
+             <span style="margin-left:auto;opacity:.45;font-family:ui-monospace,monospace">id=${esc(c.id)}</span>
+         </li>`).join('');
+      document.getElementById('status').innerHTML =
+        `<span class="ok">✓ 数据层经 IPC 返回 ${chans.length} 条，tid 过滤生效</span>`;
+    } catch (e) {
+      document.getElementById('chans').innerHTML = `<li class="err">${esc(e)}</li>`;
+    }
+
+    // 启动自检：把真实渲染状态回传给后端日志。
+    // WebView2 内容走 DirectComposition 合成层、不进 GDI 屏幕表面，截图
+    // （PrintWindow / 屏幕 BitBlt）只能拿到纯白背景。让页面自己报
+    // computedStyle / 元素几何 / 文本，是区分「真白屏」与「抓图失败」的唯一手段。
+    try {
+      const b = getComputedStyle(document.body);
+      const h1 = document.querySelector('h1');
+      const r = h1 ? h1.getBoundingClientRect() : null;
+      await invoke('self_check', {
+        report: JSON.stringify({
+          title: document.title,
+          bodyBg: b.backgroundColor,
+          bodyBgImage: b.backgroundImage.slice(0, 60),
+          h1Text: h1 ? h1.textContent : null,
+          h1Box: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null,
+          liCount: document.querySelectorAll('#chans li').length,
+          envText: (document.getElementById('env').innerText || '').replace(/\s+/g, ' ').slice(0, 150),
+          dpr: devicePixelRatio,
+          viewport: `${innerWidth}x${innerHeight}`,
+        }),
+      });
+    } catch (e) {
+      console.error('self_check 上报失败', e);
+    }
+  })();
+</script>
+</body>
+</html>

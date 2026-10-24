@@ -11,3 +11,9 @@
 pub mod base64x;
 pub mod core;
 pub mod wvt;
+
+/// 数据层版本（编译期从本 crate 的 Cargo.toml 取）。
+///
+/// GUI 侧通过它确认「引用的是哪个版本的数据层」——比在壳里硬编码字符串
+/// 可信：这个值只能由 core crate 自己编译出来。
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
