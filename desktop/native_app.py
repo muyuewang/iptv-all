@@ -1040,46 +1040,6 @@ class NativeApp:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # ★ v2.11.0 置顶 Pod（灵动岛风格悬浮胶囊）。默认开启；关掉可用
-        #   设置「收起 Pod」。默认不显示，等第一个频道起播时 show。
-        self.pod_enabled = True
-        self.pod = None
-        try:
-            import pod as _pod
-            self.pod = _pod.FloatingPod(self, enabled=self.pod_enabled)
-        except Exception as e:          # noqa: BLE001
-            self._log("Pod 初始化失败（功能禁用）：%r" % (e,))
-            self.pod = None
-
-    # ---------------- 置顶 Pod 对接 ----------------
-    def pod_match_logo(self, name):
-        """Pod 台标检索（复用主应用台标库）。"""
-        try:
-            return _core.match_logo(name, self.logos)
-        except Exception:
-            return None
-
-    def pod_request_logo(self, url, cb):
-        """Pod 台标异步下载（复用 LogoStore）。"""
-        try:
-            self.logo_store.request(url, cb)
-        except Exception:
-            pass
-
-    def pod_event(self, kind, *args):
-        """播放入口统一上报给 Pod（幂等，Pod 不存在则跳过）。"""
-        if self.pod is None:
-            return
-        try:
-            if kind == "show":
-                self.pod.show(*args)
-            elif kind == "play":
-                self.pod.play(*args)
-            elif kind == "hide":
-                self.pod.hide()
-        except Exception:
-            pass
-
     def _warm_embed(self):
         """后台把内嵌浏览器建好待命（失败就算了，不影响正常播放路径）。"""
         if self.embed is not None or _embed_mod is None:
@@ -1277,22 +1237,6 @@ class NativeApp:
             except Exception:
                 pass
         self.root.after(140, self._sync_chrome)
-
-    def _restore_main(self):
-        """从 Pod / 其它地方把主窗口带回前台（最小化→还原并置顶）。"""
-        try:
-            if self.root.state() == "iconic":
-                self.root.deiconify()
-            if self._fullscreen:
-                # 全屏时退出全屏，避免挡着
-                self._set_fullscreen(False)
-            self.root.lift()
-            self.root.focus_force()
-        except Exception:
-            try:
-                self.root.lift()
-            except Exception:
-                pass
 
     def _sync_chrome(self):
         """最大化状态同步到按钮字形 / 右边距（最大化时按钮让开屏幕角 8px）。"""
@@ -2120,7 +2064,6 @@ class NativeApp:
         self.epg_title.configure(text="节目单 · " + name)
         self._mark_selected()
         self._show_loading(name, "正在获取线路…")
-        self.pod_event("show", name, "正在获取线路…")
 
         if self.cur["src"] == "wvt":
             ch = (self.wvt_by_id or {}).get(cid)
@@ -2756,8 +2699,6 @@ class NativeApp:
         self._load_phase_t0 = time.time()
         if self._load_after is None:
             self._load_after = self.root.after(LOAD_MS, self._load_tick)
-        # Pod 同步收转圈（起播成功 / 线路失败都到这里；失败时主窗口另有报错卡）
-        self.pod_event("play", self.cur.get("name"))
 
     def _paint_loading(self, a, now):
         """按透明度 a（0=全隐 1=全显）重绘一帧。
@@ -3524,12 +3465,16 @@ class NativeApp:
             # 只收顶栏 / 控制条 / 左侧列表 / 节目单。
             for w in (self.top_bar, self.ctrl_bar, self.left_panel, self.epg_bar):
                 w.pack_forget()
-            self.root.attributes("-fullscreen", True)
+            self._enter_fullscreen_win32()
             self._show_fs_overlay()
             self.status_lbl.configure(text="")       # 沉浸模式不显示状态文案
         else:
             self._hide_fs_overlay()
-            self.root.attributes("-fullscreen", False)
+            # ★ v2.11.0 全屏改用 Win32 SetWindowPos 精确铺满 rcMonitor（不再用
+            #   Tk 的 -fullscreen，那玩意铺的不是物理满屏：在摘了 WS_CAPTION 的
+            #   沉浸式窗口上按 rcWork 留边，两侧各漏一条缝看到壁纸）。退出时
+            #   恢复进全屏前保存的窗口矩形。
+            self._exit_fullscreen_win32()
             # ★ 退出时先把 body / right_panel 从 pack 队列摘下来再按初始顺序重排。
             #   pack() 对已在队列里的控件不会挪位置，漏这一步的话 left_panel 会
             #   被追加到 right_panel 后面（频道列表跑到右边）、top_bar 被追加到
@@ -3553,6 +3498,89 @@ class NativeApp:
             self.root.focus_force()
         except Exception:
             pass
+
+    # ---------------- 全屏（Win32 精确铺满，替代 Tk -fullscreen） ----------------
+    def _win_rect(self):
+        """当前窗口物理矩形 (l, t, r, b)；失败 None。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            r = wintypes.RECT()
+            h = self.root.winfo_id()
+            # winfo_id 是内层子窗口，向上找顶层 HWND
+            u = ctypes.windll.user32
+            for _ in range(8):
+                p = u.GetParent(h)
+                if not p:
+                    break
+                h = p
+            if not u.GetWindowRect(h, ctypes.byref(r)):
+                return None
+            return (r.left, r.top, r.right, r.bottom)
+        except Exception:
+            return None
+
+    def _mon_rect(self):
+        """窗口所在（最近）显示器的物理满屏矩形 rcMonitor；失败 None。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            u = ctypes.windll.user32
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD),
+                            ("rcMonitor", wintypes.RECT),
+                            ("rcWork", wintypes.RECT),
+                            ("dwFlags", wintypes.DWORD)]
+            h = self.root.winfo_id()
+            for _ in range(8):
+                p = u.GetParent(h)
+                if not p:
+                    break
+                h = p
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            mon = u.MonitorFromWindow(h, 2)     # MONITOR_DEFAULTTONEAREST
+            if not mon or not u.GetMonitorInfoW(mon, ctypes.byref(mi)):
+                return None
+            m = mi.rcMonitor
+            return (m.left, m.top, m.right, m.bottom)
+        except Exception:
+            return None
+
+    def _apply_win_rect(self, rect):
+        """SetWindowPos 把顶层窗口精确铺到给定物理矩形（不限工作区）。"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            u = ctypes.windll.user32
+            h = self.root.winfo_id()
+            for _ in range(8):
+                p = u.GetParent(h)
+                if not p:
+                    break
+                h = p
+            l, t, r, b = rect
+            # SWP_NOZORDER | SWP_NOACTIVATE：改几何不抢焦点不改变 z 序
+            u.SetWindowPos(h, None, l, t, r - l, b - t,
+                           0x0004 | 0x0010)
+            return True
+        except Exception:
+            return False
+
+    def _enter_fullscreen_win32(self):
+        """进入全屏：先记下当前窗口矩形，再铺满显示器物理满屏。"""
+        self._fs_prev_rect = self._win_rect()
+        mr = self._mon_rect()
+        if mr:
+            self._apply_win_rect(mr)
+
+    def _exit_fullscreen_win32(self):
+        """退出全屏：恢复进全屏前保存的窗口矩形。"""
+        prev = getattr(self, "_fs_prev_rect", None)
+        if prev:
+            self._apply_win_rect(prev)
+            self._fs_prev_rect = None
 
     def _exit_fullscreen(self):
         if self._fullscreen:
@@ -3647,13 +3675,6 @@ class NativeApp:
     # ---------------- 关闭 ----------------
     def _on_close(self):
         self._closing = True
-        # 先收起并销毁 Pod，避免悬浮胶囊残留
-        try:
-            if self.pod is not None:
-                self.pod.destroy()
-                self.pod = None
-        except Exception:
-            pass
         self._stop_mpv()
         # 卸掉外框子类（把窗口过程还给 Tk）—— 否则销毁窗口时系统还会回调到
         # Python 的函数指针，那会儿对象正在被回收，属于自找崩溃。
