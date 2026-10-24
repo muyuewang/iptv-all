@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<title>纯净电视 · Rust 里程碑 0</title>
+<title>纯净电视 · Rust</title>
 <style>
   :root {
     --bg-top: #181a24;
@@ -13,6 +13,7 @@
     --fg-dim: #8f97a8;
     --hi: #ff4d6d;
     --lo: #ff6b35;
+    --panel: rgba(255,255,255,.03);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -20,116 +21,218 @@
     background: linear-gradient(180deg, var(--bg-top), var(--bg-mid) 45%, var(--bg-bot));
     color: var(--fg);
     font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    overflow: hidden;
   }
-  body { display: flex; flex-direction: column; padding: 28px 32px; gap: 18px; }
+  body { display: flex; flex-direction: column; }
+
+  /* 顶栏 */
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+    flex: 0 0 auto;
+  }
   h1 {
-    margin: 0; font-size: 20px; font-weight: 600; letter-spacing: .3px;
+    margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .3px;
     background: linear-gradient(90deg, var(--hi), var(--lo));
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
-  .sub { color: var(--fg-dim); font-size: 12.5px; margin-top: -10px; }
-  .card {
-    border: 1px solid var(--line); border-radius: 12px;
-    background: rgba(255,255,255,.025);
-    padding: 16px 18px;
+  .brand-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--hi), var(--lo));
+    flex: 0 0 auto;
   }
-  .card h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--fg-dim);
-    text-transform: uppercase; letter-spacing: .8px; }
-  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 14px; font-size: 13px; }
-  .kv dt { color: var(--fg-dim); }
-  .kv dd { margin: 0; font-family: ui-monospace, Consolas, monospace; }
-  ul { margin: 0; padding-left: 0; list-style: none; }
-  li {
+  .ver { color: var(--fg-dim); font-size: 12px; }
+
+  /* 主体：左列表 + 右播放区 */
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  /* 左侧频道列表 */
+  aside {
+    width: 260px; flex: 0 0 auto;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--line);
+    min-height: 0;
+  }
+  .cats {
+    display: flex; gap: 6px; padding: 10px 12px;
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+    overflow-x: auto;
+  }
+  .cat {
+    padding: 4px 14px; border-radius: 999px; cursor: pointer;
+    font-size: 13px; color: var(--fg-dim); white-space: nowrap;
+    border: 1px solid transparent; background: var(--panel);
+    user-select: none;
+  }
+  .cat.active {
+    color: #fff; border-color: transparent;
+    background: linear-gradient(135deg, var(--hi), var(--lo));
+  }
+  #chans { flex: 1 1 auto; overflow-y: auto; margin: 0; padding: 8px; list-style: none; }
+  #chans li {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 12px; border-radius: 8px; margin-bottom: 6px;
-    background: rgba(255,255,255,.03); border: 1px solid transparent;
+    padding: 9px 12px; border-radius: 8px; margin-bottom: 4px; cursor: pointer;
+    background: transparent; border: 1px solid transparent;
   }
-  li:hover { border-color: var(--line); }
+  #chans li:hover { background: var(--panel); }
+  #chans li.on {
+    border-color: var(--line);
+    background: linear-gradient(90deg, rgba(255,77,109,.12), rgba(255,107,53,.06));
+  }
   .idx {
     width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto;
-    display: grid; place-items: center;
-    font-size: 11px; font-family: ui-monospace, monospace;
+    display: grid; place-items: center; font-size: 11px;
+    font-family: ui-monospace, monospace;
     background: linear-gradient(135deg, var(--hi), var(--lo)); color: #fff;
   }
-  .ok { color: #3ddc97; }
-  .err { color: var(--hi); }
-  #status { margin-left: auto; font-size: 12px; color: var(--fg-dim); }
+  .name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dim { color: var(--fg-dim); font-size: 12px; }
+
+  /* 右侧播放区 */
+  section {
+    flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0;
+  }
+  .stage {
+    flex: 1 1 auto; display: grid; place-items: center;
+    position: relative; min-height: 0;
+    background: #000;
+  }
+  .stage .ph {
+    color: var(--fg-dim); font-size: 15px; text-align: center; line-height: 2;
+  }
+  .stage .ph b {
+    display: block; font-size: 22px;
+    background: linear-gradient(90deg, var(--hi), var(--lo));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .info {
+    flex: 0 0 auto; padding: 10px 18px;
+    border-top: 1px solid var(--line); color: var(--fg-dim); font-size: 12px;
+    font-family: ui-monospace, Consolas, monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 </style>
 </head>
 <body>
-  <h1>纯净电视 · Rust 里程碑 0</h1>
-  <div class="sub">验证 MSVC + WebView2 链接、workspace 依赖、serde 跨 IPC 传值</div>
+  <header>
+    <span class="brand-dot"></span>
+    <h1>纯净电视 · Rust</h1>
+    <span class="ver" id="ver">加载中…</span>
+  </header>
 
-  <div class="card">
-    <h2>运行环境</h2>
-    <dl class="kv" id="env"><dt>加载中…</dt><dd></dd></dl>
-  </div>
+  <main>
+    <aside>
+      <div class="cats" id="cats"></div>
+      <ul id="chans"><li class="dim">加载中…</li></ul>
+    </aside>
 
-  <div class="card">
-    <h2>数据层实跑（clean-tv-core::parse_channels）</h2>
-    <ul id="chans"><li>加载中…</li></ul>
-    <div id="status"></div>
-  </div>
+    <section>
+      <div class="stage" id="stage">
+        <div class="ph">
+          <b>Pure TV · Rust</b>
+          <span>里程碑 1 · 播放区占位</span><br>
+          <span>选中左侧频道即可「播放」</span>
+        </div>
+      </div>
+      <div class="info" id="info">数据层版本 —</div>
+    </section>
+  </main>
 
 <script>
   const { invoke } = window.__TAURI__.core;
-
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-  (async () => {
+  let curTid = 'tv';
+
+  async function loadCats() {
+    try {
+      const cats = await invoke('list_categories');
+      const el = document.getElementById('cats');
+      el.innerHTML = cats.map((c, i) =>
+        `<span class="cat${i === 0 ? ' active' : ''}" data-tid="${esc(c.tid)}">${esc(c.name)}</span>`
+      ).join('');
+      el.querySelectorAll('.cat').forEach((node) =>
+        node.addEventListener('click', () => {
+          el.querySelectorAll('.cat').forEach((n) => n.classList.remove('active'));
+          node.classList.add('active');
+          curTid = node.dataset.tid;
+          loadChans();
+        })
+      );
+    } catch (e) {
+      document.getElementById('cats').innerHTML =
+        `<span class="dim">分类加载失败：${esc(e)}</span>`;
+    }
+  }
+
+  async function loadChans() {
+    const list = document.getElementById('chans');
+    list.innerHTML = '<li class="dim">加载中…</li>';
+    try {
+      const chans = await invoke('list_channels', { tid: curTid });
+      if (!chans.length) {
+        list.innerHTML = '<li class="dim">（空）</li>';
+        return;
+      }
+      list.innerHTML = chans.map((c, i) =>
+        `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}">
+           <span class="idx">${i + 1}</span>
+           <span class="name">${esc(c.name)}</span>
+         </li>`
+      ).join('');
+      list.querySelectorAll('li').forEach((node) =>
+        node.addEventListener('click', () => {
+          list.querySelectorAll('li').forEach((n) => n.classList.remove('on'));
+          node.classList.add('on');
+          const name = node.dataset.name;
+          const stage = document.getElementById('stage');
+          stage.innerHTML =
+            `<div class="ph"><b>${esc(name)}</b>
+             <span>里程碑 1 · 播放占位（播放层后续里程碑接入）</span></div>`;
+        })
+      );
+    } catch (e) {
+      list.innerHTML = `<li class="dim">加载失败：${esc(e)}</li>`;
+    }
+  }
+
+  async function boot() {
     try {
       const info = await invoke('app_info');
-      document.getElementById('env').innerHTML = Object.entries({
-        '应用': info.app,
-        '应用版本': info.app_version,
-        '数据层版本': info.core_version,
-        '编译目标': info.target,
-        '构建配置': info.profile,
-      }).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+      document.getElementById('ver').textContent =
+        `v${info.app_version} · core ${info.core_version} · ${info.profile}`;
+      document.getElementById('info').textContent =
+        `数据层版本 ${info.core_version} · 编译目标 ${info.target} · 构建 ${info.profile}`;
     } catch (e) {
-      document.getElementById('env').innerHTML =
-        `<dt class="err">IPC 失败</dt><dd class="err">${esc(e)}</dd>`;
+      document.getElementById('ver').textContent = `IPC 失败: ${e}`;
     }
 
-    try {
-      const chans = await invoke('demo_channels');
-      document.getElementById('chans').innerHTML = chans.map((c, i) =>
-        `<li><span class="idx">${i + 1}</span>
-             <span>${esc(c.name)}</span>
-             <span style="margin-left:auto;opacity:.45;font-family:ui-monospace,monospace">id=${esc(c.id)}</span>
-         </li>`).join('');
-      document.getElementById('status').innerHTML =
-        `<span class="ok">✓ 数据层经 IPC 返回 ${chans.length} 条，tid 过滤生效</span>`;
-    } catch (e) {
-      document.getElementById('chans').innerHTML = `<li class="err">${esc(e)}</li>`;
-    }
+    await loadCats();
+    await loadChans();
 
-    // 启动自检：把真实渲染状态回传给后端日志。
-    // WebView2 内容走 DirectComposition 合成层、不进 GDI 屏幕表面，截图
-    // （PrintWindow / 屏幕 BitBlt）只能拿到纯白背景。让页面自己报
-    // computedStyle / 元素几何 / 文本，是区分「真白屏」与「抓图失败」的唯一手段。
+    // 启动自检：回传渲染状态，区分「真白屏」与「抓图失败」
     try {
       const b = getComputedStyle(document.body);
-      const h1 = document.querySelector('h1');
-      const r = h1 ? h1.getBoundingClientRect() : null;
+      const aside = document.querySelector('aside');
       await invoke('self_check', {
         report: JSON.stringify({
           title: document.title,
-          bodyBg: b.backgroundColor,
           bodyBgImage: b.backgroundImage.slice(0, 60),
-          h1Text: h1 ? h1.textContent : null,
-          h1Box: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null,
-          liCount: document.querySelectorAll('#chans li').length,
-          envText: (document.getElementById('env').innerText || '').replace(/\s+/g, ' ').slice(0, 150),
-          dpr: devicePixelRatio,
+          catCount: document.querySelectorAll('.cat').length,
+          chanCount: document.querySelectorAll('#chans li').length,
+          hasStage: !!document.getElementById('stage'),
+          asideBox: aside ? `${aside.clientWidth}x${aside.clientHeight}` : null,
           viewport: `${innerWidth}x${innerHeight}`,
+          dpr: devicePixelRatio,
         }),
       });
     } catch (e) {
       console.error('self_check 上报失败', e);
     }
-  })();
+  }
+
+  boot();
 </script>
 </body>
 </html>
