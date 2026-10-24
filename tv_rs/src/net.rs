@@ -328,6 +328,122 @@ pub fn blocking_fetch_play(
     Ok((res.urls, parse_epg(&html), res.msg))
 }
 
+// ==================================================================
+// 本机源（WebViewTvLive）数据下载层
+// ==================================================================
+//
+// 本机源频道表托管在 GitHub（`hxh19950701/WebViewTvLive` 的 `data/4/full.dat`），
+// 是 AES-128-CBC 加密 + gzip 的 JSON（904 频道 / 1114 线路）。走 raw + 多代理
+// 镜像回退，**与官方源 `api2.2026016.xyz` 完全独立**——官方源限流不影响本机源。
+//
+// 本机源线路构成：1114 条里仅 61 条直连（m3u8/flv，mpv 可直接播），其余 1053 条
+// 是网页线路（需 WebView2 嗅探，暂不在本模块处理）。这里只接「直连」增量。
+
+use crate::wvt::{decrypt_dat_json, is_direct_stream, WvtChannel};
+
+/// 本机源 GitHub 仓库信息（对应 Python `wvt.py`）。
+const WVT_OWNER: &str = "hxh19950701";
+const WVT_REPO: &str = "WebViewTvLive";
+const WVT_BRANCH: &str = "main";
+const WVT_DATA: &str = "data/4/full.dat";
+
+/// raw 直连地址 + 保底镜像（prefix 型 GitHub 代理）。
+const WVT_RAW_URL: &str = "https://raw.githubusercontent.com/hxh19950701/WebViewTvLive/main";
+const WVT_PREFIX_PROXIES: [&str; 4] = [
+    "https://ghproxy.net",
+    "https://gh-proxy.com/",
+    "https://ghfast.top/",
+    "https://ghproxy.cc",
+];
+const WVT_HOST_PROXIES: [&str; 2] = ["https://raw.gitmirror.com", "https://kkgithub.com"];
+const WVT_JSDELIVR: [&str; 2] = ["https://fastly.jsdelivr.net", "https://cdn.jsdelivr.net"];
+
+/// 生成本机源 `full.dat` 的候选下载地址（多镜像回退顺序）。
+///
+/// 对应 Python `_candidate_urls`：直连 → jsDelivr → host 代理 → prefix 代理。
+fn wvt_candidate_urls() -> Vec<String> {
+    let raw = format!("{WVT_RAW_URL}/{WVT_DATA}");
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let mut add = |u: String| {
+        if !u.is_empty() && !seen.contains(&u) {
+            seen.push(u.clone());
+            out.push(u);
+        }
+    };
+
+    add(raw.clone());
+    for cdn in WVT_JSDELIVR {
+        add(format!("{cdn}/gh/{WVT_OWNER}/{WVT_REPO}@{WVT_BRANCH}/{WVT_DATA}"));
+    }
+    for h in WVT_HOST_PROXIES {
+        add(format!(
+            "{}/{}/{}/{}/{}",
+            h.trim_end_matches('/'),
+            WVT_OWNER,
+            WVT_REPO,
+            WVT_BRANCH,
+            WVT_DATA
+        ));
+    }
+    for p in WVT_PREFIX_PROXIES {
+        add(format!("{}/{}", p.trim_end_matches('/'), raw));
+    }
+    out
+}
+
+/// 下载本机源 `full.dat` 并解密成频道表（多镜像回退）。
+///
+/// 对应 Python `load_channels` 的联网分支（`download_dat` + `decrypt_dat_json`）。
+/// 用 blocking 客户端（复用同一套放宽证书 + 零环境代理的 reqwest 栈）。
+pub fn blocking_fetch_wvt_channels(
+    cli: &reqwest::blocking::Client,
+) -> Result<Vec<WvtChannel>, String> {
+    let mut last_err = String::from("全部镜像均不可用");
+    for url in wvt_candidate_urls() {
+        let bytes: Vec<u8> = match cli
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(12))
+            .send()
+            .and_then(|r| r.bytes().map(|b| b.to_vec()))
+        {
+            Ok(b) if b.len() > 64 => b,
+            Ok(_) => {
+                last_err = "响应过小".into();
+                continue;
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                continue;
+            }
+        };
+        match decrypt_dat_json(&bytes) {
+            Some(v) => {
+                if let Ok(chans) = serde_json::from_value::<Vec<WvtChannel>>(v) {
+                    return Ok(chans);
+                }
+                last_err = "频道表 JSON 结构不符".into();
+            }
+            None => last_err = "解密失败".into(),
+        }
+    }
+    Err(last_err)
+}
+
+/// 从本机源频道表里提取「直连线路」频道，返回 (频道名, 直连 URL)。
+///
+/// 只取每个频道第 1 条直连线路（mpv 直接可播），忽略网页线路。
+/// 对应 `split_sources` 里的 direct 分支 + 去重取首条。
+pub fn wvt_direct_lines(channels: &[WvtChannel]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for c in channels {
+        if let Some(u) = c.urls.iter().find(|u| is_direct_stream(&u.url)) {
+            out.push((c.name.clone(), u.url.clone()));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

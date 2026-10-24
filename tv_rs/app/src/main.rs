@@ -75,6 +75,53 @@ static CHANNELS_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String,
 static PLAY_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> =
     std::sync::Mutex::new(None);
 
+/// 本机源（WebViewTvLive）合流的分类 tid。本机源 904 频道里仅约 55 条直连 m3u8
+/// 是 mpv 可直接播的，统一归入这个分类（前端无需区分来源）。
+const WVT_TID: &str = "wvt";
+
+/// 预抓取本机源（WebViewTvLive）直连线路，合流进 CHANNELS_CACHE / PLAY_CACHE。
+///
+/// 本机源频道表托管在 GitHub（`hxh19950701/WebViewTvLive` 的 `data/4/full.dat`），
+/// 与官方源 `api2.2026016.xyz` 完全独立——官方源限流不影响它。解密后取每频道
+/// 第 1 条直连 m3u8/flv 写入缓存，命令 handler 内依旧零 HTTPS。
+fn prewarm_wvt() {
+    diag("[boot] 开始预抓取本机源（WebViewTvLive）");
+    let cli = clean_tv_core::net::blocking_client();
+    match clean_tv_core::net::blocking_fetch_wvt_channels(&cli) {
+        Ok(chans) => {
+            let mut chan_list: Vec<Channel> = Vec::new();
+            let mut play_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            let mut idx = 0usize;
+            for c in &chans {
+                if let Some(u) = c.urls.iter().find(|u| clean_tv_core::wvt::is_direct_stream(&u.url)) {
+                    let cid = idx.to_string();
+                    idx += 1;
+                    chan_list.push(Channel { id: cid.clone(), name: c.name.clone() });
+                    play_map.insert(format!("{WVT_TID}:{cid}"), u.url.clone());
+                }
+            }
+            diag(&format!("[boot] 本机源解密 {} 频道，直连 {} 条", chans.len(), chan_list.len()));
+            // 合流进全局缓存（CHANNELS_CACHE / PLAY_CACHE 两处都要）。
+            {
+                let mut guard = CHANNELS_CACHE.lock().unwrap();
+                if let Some(map) = guard.as_mut() {
+                    map.insert(WVT_TID.to_string(), chan_list);
+                }
+            }
+            {
+                let mut guard = PLAY_CACHE.lock().unwrap();
+                if let Some(map) = guard.as_mut() {
+                    map.extend(play_map);
+                }
+            }
+        }
+        Err(e) => {
+            diag(&format!("[boot] 本机源预抓取失败: {e}"));
+        }
+    }
+}
+
 /// 启动预抓取所有分类的频道列表（用 blocking 客户端，在 main 里同步先抓，
 /// 不经过任何命令 handler）。抓完后写入 CHANNELS_CACHE，命令只读缓存。
 fn prewarm_channels() {
@@ -160,13 +207,23 @@ fn prewarm_play_lines() {
     diag(&format!("[boot] 线路预抓取完成，命中 {} 条直连", n));
 }
 
-/// 返回分类列表（真实分类，来自 net::CATS）。
+/// 返回分类列表（官方源 6 分类 + 本机源 1 分类）。
 #[tauri::command]
 fn list_categories() -> Vec<Category> {
-    clean_tv_core::net::CATS
+    let mut cats: Vec<Category> = clean_tv_core::net::CATS
         .iter()
         .map(|(tid, name)| Category { tid: tid.to_string(), name: name.to_string() })
-        .collect()
+        .collect();
+    // 本机源分类：仅当预抓取成功写入缓存时才显示（避免空分类）。
+    {
+        let guard = CHANNELS_CACHE.lock().unwrap();
+        if let Some(map) = guard.as_ref() {
+            if map.contains_key(WVT_TID) {
+                cats.push(Category { tid: WVT_TID.to_string(), name: "本机源直连".to_string() });
+            }
+        }
+    }
+    cats
 }
 
 /// ★ 最终方案：命令只做**纯内存读缓存**（零 HTTPS）。
@@ -314,6 +371,9 @@ fn main() {
     if std::env::var("CLEAN_TV_SKIP_PREWARM_PLAY").as_deref() != Ok("1") {
         prewarm_play_lines();
     }
+    // ★ 预抓取本机源直连线路（GitHub 下载 full.dat，与官方源独立，不受限流影响）。
+    //   必须在 prewarm_play_lines 之后：本机源直连要合流进 PLAY_CACHE。
+    prewarm_wvt();
     tauri::Builder::default()
         .manage(AppState {
             player: Arc::new(player::Player::new(
