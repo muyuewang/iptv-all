@@ -213,6 +213,18 @@ def _lerp_rgb(a, b, t):
         int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
 
+def _round_rect(cv, x0, y0, x1, y1, r, fill, outline=""):
+    """模块级圆角矩形（Canvas 手绘，smooth 曲线）。台标徽章 / 其它圆角用。"""
+    r = max(0.0, min(r, (x1 - x0) / 2.0, (y1 - y0) / 2.0))
+    cv.create_polygon(
+        x0 + r, y0, x1 - r, y0, x1 - r, y0, x1, y0,
+        x1, y0 + r, x1, y0 + r, x1, y1 - r, x1, y1 - r,
+        x1, y1, x1 - r, y1, x1 - r, y1, x0 + r, y1,
+        x0 + r, y1, x0, y1, x0, y1 - r, x0, y1 - r,
+        x0, y0 + r, x0, y0 + r, x0 + r, y0, x0 + r, y0,
+        fill=fill, outline=outline, smooth=True)
+
+
 class PillBar(tk.Canvas):
     """
     一排圆角胶囊按钮（Canvas 手绘）。
@@ -823,9 +835,10 @@ class LogoStore:
         if not data:
             return None
         if self.pil:
-            from PIL import Image
+            from PIL import Image, ImageDraw
             im = Image.open(io.BytesIO(data)).convert("RGBA")
             im.thumbnail((self.size, self.size))
+            im = self._round_icon(im)       # ★ v2.12.0 台标统一裁成圆角
             im.save(cp)
             return cp
         # 无 Pillow：仅原生 PNG 可解
@@ -844,6 +857,23 @@ class LogoStore:
             return img
         except Exception:
             return None
+
+    @staticmethod
+    def _round_icon(im, radius=None):
+        """把方图裁成圆角透明底（radius 默认图宽的 24%）。
+
+        做法：按尺寸画一张圆角矩形的 alpha mask，再用 putalpha 套上去——
+        四角变成透明，其余保留。台标从此统一圆角，视觉更精致统一。
+        """
+        from PIL import Image, ImageDraw
+        w, h = im.size
+        r = int(radius if radius is not None else max(4, round(min(w, h) * 0.24)))
+        r = max(1, min(r, w // 2, h // 2))
+        mask = Image.new("L", (w, h), 0)
+        d = ImageDraw.Draw(mask)
+        d.rounded_rectangle((0, 0, w - 1, h - 1), radius=r, fill=255)
+        im.putalpha(mask)
+        return im
 
     def _finish(self, url, path, cb):
         img = self._to_photo(path) if path else None
@@ -922,6 +952,10 @@ class NativeApp:
         # 跨线程 UI 队列（_ui 线程安全依赖；先建好，后台线程随时可能调 _ui）
         self._ui_q = queue.Queue()
         self._closing = False
+        # ★ v2.12.0 列表滚动缓动状态：滚轮给初速度，_scroll_tick 按帧阻尼衰减
+        self._scroll_vel = 0.0
+        self._scroll_timer = None
+        self._hover_row = None            # hover 单热点（快速滑动残影修复）
 
         self.font_family = self._pick_font()
         self._setup_style()
@@ -1420,10 +1454,12 @@ class NativeApp:
         self.status_lbl = tk.Label(top, text="", bg=GRS_MID, fg=FG_MUTE, font=self.F(9))
         self.status_lbl.pack(side="right", padx=(8, 12))
 
-        self.settings_btn = tk.Button(top, text="⚙ 设置", bg=GRS_LINE_DIM, fg=FG_DIM,
-                                      relief="flat", bd=0, padx=12, pady=6,
+        # ★ v2.12.0 设置入口换 Segoe MDL2 矢量齿轮（\ue713），比「⚙ 设置」文字更精致
+        ifam = self._icon_font() or self.font_family
+        self.settings_btn = tk.Button(top, text="\ue713", bg=GRS_LINE_DIM, fg=FG_DIM,
+                                      relief="flat", bd=0, padx=11, pady=6,
                                       activebackground=GRAD_HI, activeforeground="#fff",
-                                      font=self.F(10), cursor="hand2",
+                                      font=(ifam, 13), cursor="hand2",
                                       command=self._open_settings)
         self.settings_btn.pack(side="right", padx=6, pady=12)
 
@@ -1674,7 +1710,26 @@ class NativeApp:
         fn()
 
     def _on_wheel(self, e):
-        self.canvas.yview_scroll(int(-e.delta / 120), "units")
+        # ★ v2.12.0 列表滚动缓动：滚轮不再生硬逐行跳，而是给一个「初速度」并
+        #   按帧衰减（指数阻尼），滚完还有一点惯性滑行，跟现代应用的滚动手感一致。
+        #   向下滚（delta<0）→ 列表向下移动 → 内容往上，即 yview 正向。
+        steps = int(-e.delta / 120)        # 每次触发的初始速度（滚格数）
+        self._scroll_vel += steps
+        if self._scroll_timer is None:
+            self._scroll_timer = self.root.after(16, self._scroll_tick)
+
+    def _scroll_tick(self):
+        self._scroll_timer = None
+        if self._closing:                  # 窗口已关，停止惯性，避免 after 空转
+            self._scroll_vel = 0.0
+            return
+        # 每帧按速度滚动，再用阻尼衰减速度；速度接近 0 就停，避免空转
+        if abs(self._scroll_vel) < 0.05:
+            self._scroll_vel = 0.0
+            return
+        self.canvas.yview_scroll(int(round(self._scroll_vel)), "units")
+        self._scroll_vel *= 0.80          # 指数阻尼，滚越快惯性越明显
+        self._scroll_timer = self.root.after(16, self._scroll_tick)
 
     def _on_epg_wheel(self, e):
         self.epg_canvas.xview_scroll(int(-e.delta / 120) * 2, "units")
@@ -1979,6 +2034,20 @@ class NativeApp:
             self._make_row(c)
         self._mark_selected()
 
+    def _paint_badge(self, cv, bgc, letter):
+        """在圆角 Canvas 上画「圆角底色 + 首字母」兜底徽标。
+
+        cv 必须已 place 固定尺寸；用现有 _round 画圆角矩形，再居中写字母。
+        字母用与底色反差的白字（彩底白字最稳，无需算亮度）。
+        """
+        w = int(cv["width"])
+        h = int(cv["height"])
+        r = max(4, round(min(w, h) * 0.26))
+        cv.delete("all")
+        _round_rect(cv, 0, 0, w, h, r, bgc)
+        cv.create_text(w // 2, h // 2, text=letter, fill="#ffffff",
+                       font=self.F(11, True))
+
     def _make_row(self, c):
         # 行高加大留白（pady 上下各 3px），名称用细字重，让列表更透气、更现代
         row = tk.Frame(self.chan_frame, bg=GRS_BOT, cursor="hand2")
@@ -1994,17 +2063,25 @@ class NativeApp:
         seg_hi.pack(fill="both", expand=True)
         row._seg_hi = seg_hi
 
-        # 台标槽
+        # 台标槽（v2.12.0：兜底徽标改圆角 Canvas + 图片标签双层叠加）
         slot = tk.Frame(row, bg=GRS_BOT, width=LOGO_SIZE + 4, height=LOGO_SIZE + 4)
         slot.pack(side="left", padx=(0, 10), pady=2)
         slot.pack_propagate(False)
-        badge = tk.Label(slot, text=(c["name"][:1] if c["name"] else "?"),
-                         bg=badge_color(c["name"]), fg="#fff", font=self.F(12, True))
-        badge.pack(fill="both", expand=True)
+        # 圆角徽标底板（无图时显示首字母；有图时 hidden 让位给图片）
+        badge_bg = badge_color(c["name"])
+        badge_cv = tk.Canvas(slot, width=LOGO_SIZE + 4, height=LOGO_SIZE + 4,
+                             bg=GRS_BOT, highlightthickness=0, bd=0)
+        badge_cv.place(relx=0.5, rely=0.5, anchor="center")
+        self._paint_badge(badge_cv, badge_bg, c["name"][:1] if c["name"] else "?")
+        # 图片标签（台标异步下载完成前是隐藏的透明 Label）
+        badge = tk.Label(slot, text="", bg=GRS_BOT, fg="#fff", font=self.F(12, True))
+        badge.place(relx=0.5, rely=0.5, anchor="center")
+        badge.lower()                  # 先沉底，图片到了再置顶显示
+        badge_cv._badge_lbl = badge    # 互相关联，方便切换显隐
 
         url = _core.match_logo(c["name"], self.logos)
 
-        def on_logo(img, badge=badge):
+        def on_logo(img, badge=badge, cv=badge_cv):
             # 台标是异步下载的：回调触发时该行可能已被 _clear() 销毁（切分类/换分组），
             # 直接 configure 会抛 TclError 刷屏 —— 必须先确认控件还活着。
             if img is None:
@@ -2012,7 +2089,9 @@ class NativeApp:
             try:
                 if not badge.winfo_exists():
                     return
-                badge.configure(image=img, text="", bg=GRS_BOT)
+                cv.delete("all")               # 圆角兜底底板让位
+                badge.configure(image=img, bg=GRS_BOT)
+                badge.lift()                   # 图片置顶，盖住底板
                 badge.image = img
             except Exception:
                 pass
@@ -2043,7 +2122,7 @@ class NativeApp:
                                font=self.F(8, True), cursor="hand2")
             tag_lbl.pack(side="right", padx=(0, 7))
 
-        widgets = (row, slot, badge, name)
+        widgets = (row, slot, badge, badge_cv, name)
         if tag_lbl is not None:
             widgets = widgets + (tag_lbl,)
             row._tag_lbl = tag_lbl
@@ -2052,10 +2131,12 @@ class NativeApp:
         row._sel = (key == self._sel_key)
         # ★ v2.12.0 给行挂上参与 hover 高亮的组件引用，供 _row_hover_off 回退用
         row._badge = badge
+        row._badge_cv = badge_cv
         row._slot = slot
         if row._sel:
             for w in (row, slot, name) + ((tag_lbl,) if tag_lbl else ()):
                 w.configure(bg=SEL_GRAD_LO)
+            badge_cv.configure(bg=SEL_GRAD_LO)
             seg_hi.configure(bg=GRAD_HI)
             name.configure(fg=FG)
         else:
@@ -2081,7 +2162,10 @@ class NativeApp:
         sel = getattr(row, "_sel", False)
         base = SEL_GRAD_LO if sel else GRS_BOT
         bg = HOVER_BG if on else base
-        for w in (row, name, badge, slot):
+        badge_cv = getattr(row, "_badge_cv", None)
+        for w in (row, name, badge, badge_cv, slot):
+            if w is None:
+                continue
             try:
                 self._anim_bg(w, bg, steps=5, interval=12)
             except Exception:
@@ -2113,9 +2197,10 @@ class NativeApp:
         sel = getattr(row, "_sel", False)
         base = SEL_GRAD_LO if sel else GRS_BOT
         badge = getattr(row, "_badge", None)
+        badge_cv = getattr(row, "_badge_cv", None)
         slot = getattr(row, "_slot", None)
         tl = getattr(row, "_tag_lbl", None)
-        for w in (row, name, badge, slot, tl):
+        for w in (row, name, badge, badge_cv, slot, tl):
             if w is None:
                 continue
             try:
