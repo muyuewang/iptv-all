@@ -997,20 +997,41 @@ fn place_live_window(hwnd: u64, x: i32, y: i32, w: i32, h: i32) {
     }
 }
 
-/// 关掉当前存活的直播窗（换台/停止时调用，避免渲染进程堆积）。
+/// 立即隐藏一个窗口（不销毁）。`ShowWindow(SW_HIDE)` 是微秒级调用，可在主线程直接用。
+#[cfg(windows)]
+fn hide_raw_window(hwnd: u64) {
+    if hwnd == 0 {
+        return;
+    }
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut std::ffi::c_void), SW_HIDE);
+    }
+}
+
+/// 关掉当前存活的直播窗（换台 / 换源 / 停止时调用）。
+///
+/// ★★ 必须「**先同步隐藏、再异步销毁**」，两步都不能省：
+///   只用 `win.close()` 且放在后台线程（早期为了不卡主线程这么干过）→
+///   **旧直播窗还在屏幕最上层继续播**：切到本机源后，官网的画面盖住 mpv 的
+///   画面，而且两路声音同时响（用户实测：CCTV-6 盖住 TVB 翡翠台）。
+///   只用同步 `close()` → 销毁 WebView2 要通知渲染进程退出，几百毫秒卡主线程。
+///   所以：同步 `SW_HIDE` 让画面与声音**立刻**消失（微秒级），
+///   再把真正的销毁丢给后台线程。
 pub fn close_live_window() {
-    // 先清登记，让还在跑的淡入线程立刻收手（避免它在窗口销毁后继续发 Win32 调用）
+    // 先清登记，让还在跑的淡入/出画判定线程立刻收手
     LIVE_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
     let win = LIVE_WINDOW
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .take();
     if let Some(win) = win {
-        // ★★ 不在调用方线程上 `close()` —— 本函数会被 `play_channel` 这种
-        //   **同步命令**调用（主线程），而销毁一个 WebView2 窗口要通知渲染进程
-        //   退出，实测可达数百毫秒；卡住主线程就是「切台偶尔无响应」。
-        //   放到后台线程关，调用方立即返回。
-        //   （代价：换台瞬间可能旧窗与新窗短暂并存，随即旧窗消失。）
+        // ① 同步隐藏：立刻切断画面 + 音频（Chromium 判定页面不可见后会停掉媒体）
+        if let Ok(h) = win.hwnd() {
+            hide_raw_window(h.0 as usize as u64);
+        }
+        // ② 后台销毁：这一步要等渲染进程退出，不能占调用方线程
         std::thread::spawn(move || {
             let _ = win.close();
         });

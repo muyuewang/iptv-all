@@ -691,6 +691,35 @@
     } catch (e) { /* 忽略 */ }
   }
 
+  // 自动化测试钩子（CLEAN_TV_SWITCH_AT）：后端到点回推，切到指定频道
+  try {
+    window.__TAURI__.event.listen('auto-play', (ev) => {
+      const parts = String(ev.payload || '').split('|');
+      const tid = parts[0] || '';
+      const cid = parts[1] || '';
+      const nm = parts[2] || cid;
+      if (!tid || !cid) return;
+      const wantSrc = tid.startsWith('w|') ? 'official' : 'local';
+      if (wantSrc !== curSrc) {
+        curSrc = wantSrc;
+        document.querySelectorAll('#srcbar .src').forEach((n) =>
+          n.classList.toggle('active', n.dataset.src === curSrc));
+        document.getElementById('selLabel').textContent = selLabelText();
+        rebuildCats();
+      }
+      curTid = tid;
+      const sel = document.getElementById('catsel');
+      if (sel && sel.querySelector(`option[value="${CSS.escape(tid)}"]`)) sel.value = tid;
+      // 打上选中态（列表可能还没渲染出这个频道，不打也不影响播放）
+      const li = document.querySelector(`#chans li[data-id="${CSS.escape(String(cid))}"]`);
+      if (li) {
+        document.querySelectorAll('#chans li').forEach((n) => n.classList.remove('on'));
+        li.classList.add('on');
+      }
+      play(cid, nm);
+    });
+  } catch (e) { /* 忽略 */ }
+
   // 自动化测试钩子（CLEAN_TV_AUTOFULLSCREEN）：后端到点回推，直接切全屏
   try {
     window.__TAURI__.event.listen('auto-fullscreen', () => { toggleFs(); });

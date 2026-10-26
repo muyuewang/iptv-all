@@ -2014,6 +2014,22 @@ fn main() {
             // ★ 自动化测试钩子：CLEAN_TV_AUTOFULLSCREEN=<秒> → 到点通知前端切全屏。
             //   官网源的画面是独立 WebView2 窗口，无法用 CDP 点按钮（开 CDP 会让
             //   直播窗建不出来），所以留这个钩子做「全屏后是否铺满」的验收。
+            // ★ 自动化测试钩子：CLEAN_TV_SWITCH_AT=<秒> + _TID/_CID/_NAME
+            //   → 到点通知前端切到另一个频道（用于复现「官网源切本机源时旧窗残留」）。
+            if let Ok(v) = std::env::var("CLEAN_TV_SWITCH_AT") {
+                let secs = v.parse::<u64>().unwrap_or(20);
+                let tid = std::env::var("CLEAN_TV_SWITCH_TID").unwrap_or_default();
+                let cid = std::env::var("CLEAN_TV_SWITCH_CID").unwrap_or_default();
+                let name = std::env::var("CLEAN_TV_SWITCH_NAME").unwrap_or_default();
+                if !tid.is_empty() {
+                    let ah = app.handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(secs));
+                        diag(&format!("[test] 自动切台 -> {tid}:{cid} {name}"));
+                        let _ = ah.emit("auto-play", format!("{tid}|{cid}|{name}"));
+                    });
+                }
+            }
             if let Ok(v) = std::env::var("CLEAN_TV_AUTOFULLSCREEN") {
                 let secs = v.parse::<u64>().unwrap_or(15);
                 let ah = app.handle().clone();
