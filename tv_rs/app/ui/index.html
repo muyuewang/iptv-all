@@ -386,6 +386,41 @@
     }
   }
 
+  /// 「★ 收藏」伪分类的 tid 标识（收藏跨源，所以不挂在任何真实 tid 下）
+  const FAV_TID = '__fav__';
+
+  /// 把「★ 收藏」项追加到下拉末尾（数量实时变）。
+  function appendFavOption(sel) {
+    const n = favArr().length;
+    const o = document.createElement('option');
+    o.value = FAV_TID;
+    o.textContent = n ? `★ 收藏（${n}）` : '★ 收藏';
+    sel.appendChild(o);
+  }
+
+  /// 刷新「★ 收藏」那一项的文字（收藏/取消后调用）。
+  function syncFavOption() {
+    const sel = document.getElementById('catsel');
+    if (!sel) return;
+    const o = sel.querySelector(`option[value="${FAV_TID}"]`);
+    if (!o) return;
+    const n = favArr().length;
+    o.textContent = n ? `★ 收藏（${n}）` : '★ 收藏';
+  }
+
+  /// 渲染收藏列表：跨源汇总，条目点击会先切到它所属的源/分类再播。
+  function renderFavList() {
+    const list = document.getElementById('chans');
+    const favs = favArr();
+    if (!favs.length) {
+      list.innerHTML = '<li class="dim">还没有收藏<br>在频道行右侧点 ☆ 即可加入</li>';
+      const ci = document.getElementById('chinfo');
+      if (ci) ci.textContent = '收藏 · 0 个频道';
+      return;
+    }
+    renderChans(favs.map((f) => ({ id: f.id, name: f.name, tid: f.tid })), true);
+  }
+
   // 按当前源重建下拉，并选中该源第一个分类。数据未就绪时给诚实提示。
   function rebuildCats() {
     const sel = document.getElementById('catsel');
@@ -403,6 +438,7 @@
     sel.innerHTML = cats.map((c) =>
       `<option value="${esc(c.tid)}">${esc(c.name)}</option>`
     ).join('');
+    appendFavOption(sel);   // ★ 收藏永远排在最后
     curTid = cats[0].tid;
     loadChans();
   }
@@ -423,6 +459,8 @@
 
   async function loadChans() {
     const list = document.getElementById('chans');
+    // 「★ 收藏」是前端伪分类，不走后端
+    if (curTid === FAV_TID) { renderFavList(); return; }
     // ★ 过期渲染防护：记录发起时的分类，返回时若已切走则丢弃结果——
     //   否则旧分类数据会带着新分类的 data-tid 渲染（renderChans 读全局 curTid）。
     const tidAtStart = curTid;
@@ -480,16 +518,18 @@
     return i < 0;
   }
 
-  function renderChans(chans) {
+  function renderChans(chans, isFavView) {
     const list = document.getElementById('chans');
     if (!chans || !chans.length) {
       list.innerHTML = '<li class="dim">（空）</li>';
       return;
     }
     list.innerHTML = chans.map((c, i) => {
-      const fav = isFav(curTid, c.id) ? ' on' : '';
+      // 收藏视图里每项自带 tid（来自别的分组/源）；普通视图统一用 curTid
+      const rowTid = c.tid || curTid;
+      const fav = isFav(rowTid, c.id) ? ' on' : '';
       const color = TILE_COLORS[i % TILE_COLORS.length];
-      return `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}" data-tid="${esc(curTid)}">
+      return `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}" data-tid="${esc(rowTid)}">
          <span class="tile" style="background:${color}">${esc(tileText(c.name))}</span>
          <span class="name">${esc(c.name)}</span>
          <span class="star${fav}" title="收藏">${fav ? '★' : '☆'}</span>
@@ -501,9 +541,11 @@
       const sel = document.getElementById('catsel');
       const gname = sel && sel.selectedOptions && sel.selectedOptions[0]
         ? sel.selectedOptions[0].textContent : '';
-      ci.textContent = `${curSrc === 'official' ? '官网源' : '本机源'}`
-        + (gname ? ` · ${gname}` : '')
-        + ` · ${chans.length} 个频道`;
+      ci.textContent = isFavView
+        ? `收藏 · ${chans.length} 个频道`
+        : `${curSrc === 'official' ? '官网源' : '本机源'}`
+          + (gname ? ` · ${gname}` : '')
+          + ` · ${chans.length} 个频道`;
     }
 
     list.querySelectorAll('li').forEach((node) => {
@@ -516,11 +558,32 @@
           star.classList.toggle('on', on);
           star.textContent = on ? '★' : '☆';
           syncFavBtn();
+          syncFavOption();
+          // 在收藏视图里取消收藏 → 该项立即消失
+          if (curTid === FAV_TID && !on) renderFavList();
         });
       }
       node.addEventListener('click', () => {
         list.querySelectorAll('li').forEach((n) => n.classList.remove('on'));
         node.classList.add('on');
+        // ★ 收藏视图里条目可能来自别的分类/源：先把 curTid/curSrc 切到它所属的地方，
+        //   否则 play_channel 会拿着「收藏」这个伪 tid 去请求，直接失败。
+        const rowTid = node.dataset.tid || curTid;
+        if (rowTid && rowTid !== curTid) {
+          const wantSrc = rowTid.startsWith('w|') ? 'official' : 'local';
+          curTid = rowTid;
+          if (wantSrc !== curSrc) {
+            curSrc = wantSrc;
+            document.querySelectorAll('#srcbar .src').forEach((n) =>
+              n.classList.toggle('active', n.dataset.src === curSrc));
+            document.getElementById('selLabel').textContent = selLabelText();
+            rebuildCats();
+          }
+          const sel = document.getElementById('catsel');
+          if (sel && sel.querySelector(`option[value="${CSS.escape(rowTid)}"]`)) {
+            sel.value = rowTid;
+          }
+        }
         syncFavBtn();
         play(node.dataset.id, node.dataset.name);
       });
@@ -692,6 +755,7 @@
       if (!curTid || !curPlayId) return;
       const on = toggleFav(curTid, curPlayId, curPlayName);
       syncFavBtn();
+      syncFavOption();
       // 列表里的星标同步
       const li = document.querySelector(`#chans li[data-id="${CSS.escape(String(curPlayId))}"]`);
       const star = li && li.querySelector('.star');
