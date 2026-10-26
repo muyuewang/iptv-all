@@ -959,6 +959,20 @@ fn apply_live_owner(hwnd: u64) {
 pub static MAIN_OWNER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// 把直播窗摆到指定屏幕坐标（Win32 直调）。
+/// 主窗口尺寸/位置变化（含进出全屏）时，把直播窗同步到新的播放区。
+///
+/// ★★ 少了这一步就会出现「全屏后画面只占中间一小块」：官网源的画面是
+///   独立的 WebView2 窗口，它的几何只在建窗那一次按当时的播放区摆过；
+///   之后前端 `report_stage_rect` 只移动了 mpv 承载窗，直播窗还停在旧位置。
+/// ★ 用 SetWindowPos（不经 layered/dwf），不会影响当前的淡入透明度。
+pub fn sync_live_geometry(x: i32, y: i32, w: i32, h: i32) {
+    let hwnd = LIVE_HWND.load(std::sync::atomic::Ordering::SeqCst);
+    if hwnd == 0 {
+        return;
+    }
+    place_live_window(hwnd, x, y, w, h);
+}
+
 fn place_live_window(hwnd: u64, x: i32, y: i32, w: i32, h: i32) {
     if hwnd == 0 {
         return;
@@ -987,9 +1001,19 @@ fn place_live_window(hwnd: u64, x: i32, y: i32, w: i32, h: i32) {
 pub fn close_live_window() {
     // 先清登记，让还在跑的淡入线程立刻收手（避免它在窗口销毁后继续发 Win32 调用）
     LIVE_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
-    let win = LIVE_WINDOW.lock().unwrap().take();
+    let win = LIVE_WINDOW
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take();
     if let Some(win) = win {
-        let _ = win.close();
+        // ★★ 不在调用方线程上 `close()` —— 本函数会被 `play_channel` 这种
+        //   **同步命令**调用（主线程），而销毁一个 WebView2 窗口要通知渲染进程
+        //   退出，实测可达数百毫秒；卡住主线程就是「切台偶尔无响应」。
+        //   放到后台线程关，调用方立即返回。
+        //   （代价：换台瞬间可能旧窗与新窗短暂并存，随即旧窗消失。）
+        std::thread::spawn(move || {
+            let _ = win.close();
+        });
     }
 }
 
@@ -1193,15 +1217,16 @@ pub fn sniff_stream(
 ///
 /// ★ 主窗口与嗅探窗**都要**带上它：环境选项必须逐字一致，否则第二个窗口
 ///   建不出来（0x8007139F）。未设 `CLEAN_TV_CDP_PORT` 时两窗都不带，一致。
+/// 直播窗**不启用**远程调试（返回空）。
+///
+/// ★★ 实测两种做法都不行，必须彻底关掉：
+///   · 与主窗口同一个 `--remote-debugging-port` → 第二个 WebView2 初始化
+///     **挂死 5~6 秒**：主线程周期性「阻塞约 6000ms」（Windows 标「未响应」），
+///     同时建窗回执 `recv_timeout(5s)` 超时 → 每条线路都被判失败 → 官网源全挂。
+///   · 改成「主端口 + 1」→ 建窗**直接失败**（WebView2 起不来）。
+///   CDP 只留给主窗口（查界面 DOM 足够），官网源页面用 `diag` 日志排查。
 fn debug_port_args() -> String {
-    match std::env::var("CLEAN_TV_CDP_PORT") {
-        Ok(p) if !p.is_empty() => {
-            // ★ `--remote-allow-origins` 必带：新版 Edge 对 WebSocket 连接做
-            //   Origin 校验，缺它 CDP 调试握手直接 403（实测）。
-            format!("--remote-debugging-port={p} --remote-allow-origins=*")
-        }
-        _ => String::new(),
-    }
+    String::new()
 }
 
 /// 把窗口硬挪到屏幕外（Win32 直调）。

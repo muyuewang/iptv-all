@@ -86,6 +86,51 @@ struct AppState {
 static CHANNELS_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, Vec<Channel>>>> =
     std::sync::Mutex::new(None);
 
+/// 当前播放上下文（供底部控制条显示「线路 x/y」、以及手动切换线路）。
+///
+/// ★ 为什么要单独存：`play_channel` 对本机源是**秒回**（后台线程抓线），
+///   命令返回值里拿不到真实的线路总数；而控制条需要知道「一共几条、现在是第几条」。
+///   这里由真正出画的那条路径写入，前端 `now_playing()` 读。
+#[derive(Clone, Default)]
+struct NowPlaying {
+    tid: String,
+    cid: String,
+    name: String,
+    /// "local" | "official"
+    src: String,
+    /// 解密出来的线路列表（已按探速重排过）
+    urls: Vec<String>,
+    /// 当前在播的线路序号（0 起）
+    idx: usize,
+}
+
+static NOW_PLAYING: std::sync::Mutex<Option<NowPlaying>> = std::sync::Mutex::new(None);
+
+/// 当前频道节目单（只有本机源有；官网源/切换后为空）。
+static NOW_EPG: std::sync::Mutex<Vec<clean_tv_core::core::EpgItem>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// 写入当前播放上下文（整体覆盖）。
+fn now_set(np: NowPlaying) {
+    *NOW_PLAYING.lock().unwrap_or_else(|p| p.into_inner()) = Some(np);
+}
+
+/// 只更新线路列表与当前序号（换线/出画时用）。
+fn now_update_lines(urls: Vec<String>, idx: usize) {
+    if let Some(np) = NOW_PLAYING.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        np.urls = urls;
+        np.idx = idx;
+    }
+}
+
+/// 读一份快照。
+fn now_get() -> Option<NowPlaying> {
+    NOW_PLAYING
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
 /// 全局播放线路缓存：预抓取时并发抓每个频道的直连线路，命令只读缓存。
 /// key = "{tid}:{cid}"，value = 直连线路 URL（第 1 条直连流）。
 static PLAY_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, String>>> =
@@ -1059,7 +1104,7 @@ fn play_first_ok(
     urls: &[String],
     app: &tauri::AppHandle,
     label: &str,
-) -> Result<String, String> {
+) -> Result<(String, usize), String> {
     let mut last_err = String::from("无可用线路");
     for (i, u) in urls.iter().take(6).enumerate() {
         if let Err(e) = player.play(u, hwnd, "balanced", &[]) {
@@ -1074,12 +1119,15 @@ fn play_first_ok(
                 spawn_exit_monitor(player.clone(), format!("线路{}", i + 1));
                 // ★ 通知前端清掉「正在获取播放线路中…」占位。
                 let _ = app.emit("play-started", format!("{label}"));
-                return Ok(u.clone());
+                // ★ 只把「成功的是第几条」交回调用方 —— 由它决定要不要写全局。
+                //   （这里若直接写全局，switch_line 传进来的单条数组会把
+                //     线路总数覆盖成 1，控制条就显示「线路 1/1」。）
+                return Ok((u.clone(), i));
             }
             Err(reason) => {
                 if player.gen() != gen {
                     diag(&format!("[play] 线路{} 被新会话接管（gen 已变）", i + 1));
-                    return Ok(u.clone());
+                    return Ok((u.clone(), i));
                 }
                 diag(&format!("[play] 线路{} 未出画面：{reason}，换下一条", i + 1));
                 last_err = reason;
@@ -1116,11 +1164,13 @@ fn spawn_local_fetch_depth(app: tauri::AppHandle, player: Arc<player::Player>, h
         let mut used_cid = cid.clone();
         let res = clean_tv_core::net::blocking_fetch_play(local_api(), &tid, &cid, &cli);
         match res {
-            Ok((u, _epg, msg)) if msg == "ok" => {
+            Ok((u, epg, msg)) if msg == "ok" => {
                 urls = u
                     .into_iter()
                     .filter(|x| clean_tv_core::wvt::is_direct_stream(x))
                     .collect();
+                // ★ 节目单留着给底部「节目单」按钮用（以前直接 `_epg` 丢弃了）
+                *NOW_EPG.lock().unwrap_or_else(|p: std::sync::PoisonError<_>| p.into_inner()) = epg;
             }
             Ok((_u, _epg, msg)) => {
                 diag(&format!("[play] 本机源 gen={gen} 播放页返回 msg={msg}"));
@@ -1182,8 +1232,14 @@ fn spawn_local_fetch_depth(app: tauri::AppHandle, player: Arc<player::Player>, h
             //   只探 5 条会漏掉后面的活线（实测 gt:50 愛爾達體育1台因此判死）。
             let urls = race_lines(&urls, 9, std::time::Duration::from_secs(20));
             match play_first_ok(&player, hwnd, &urls, &app, &label) {
-                Ok(_u) => {
-                    diag("[play] 本机源 播放结束（本线程收工）");
+                Ok((_u, ok_idx)) => {
+                    // 出画成功：线路列表 + 实际序号写进全局，控制条显示「线路 x/y」
+                    now_update_lines(urls.clone(), ok_idx);
+                    diag(&format!(
+                        "[play] 本机源 出画 线路 {}/{}（本线程收工）",
+                        ok_idx + 1,
+                        urls.len()
+                    ));
                 }
                 Err(e) => {
                     diag(&format!("[play] 本机源全部线路失败: {e}"));
@@ -1444,6 +1500,19 @@ fn play_channel(tid: String, cid: String, name: String, app: tauri::AppHandle,
     // ★ 切台前先停旧播放 + 关官网源直播窗（open_live_window 内部也会关，这里兜底）。
     state.player.stop();
     official_embed::close_live_window();
+    // ★ 记下当前播放上下文（控制条要显示频道名 / 线路 x/y）。线路列表稍后由
+    //   真正出画的那条路径补上（本机源是后台抓的，这里还不知道有几条）。
+    let is_official = tid.starts_with(WVT_PREFIX);
+    now_set(NowPlaying {
+        tid: tid.clone(),
+        cid: cid.clone(),
+        name: name.clone(),
+        src: if is_official { "official".into() } else { "local".into() },
+        urls: Vec::new(),
+        idx: 0,
+    });
+    // 换台即清空上一频道的节目单，避免「节目单」按钮闪出旧内容
+    NOW_EPG.lock().unwrap_or_else(|p| p.into_inner()).clear();
     let player = state.player.clone();
     let owner_hwnd = *state.hwnd.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -1470,6 +1539,192 @@ fn play_channel(tid: String, cid: String, name: String, app: tauri::AppHandle,
     spawn_local_fetch(app, player, hwnd, tid.clone(), cid.clone(), name.clone(), gen);
     diag(&format!("[play] 本机源已派发后台抓线 {tid}:{cid} gen={gen}，命令返回"));
     Ok(PlayResult { ok: true, msg: "streaming".to_string(), index: 0, total: 1, url: String::new() })
+}
+
+/// 主线程响应探针：每 2 秒往主线程投一个空任务，量「投递 → 执行」的延迟。
+///
+/// 用途：「偶尔无响应」这类问题靠肉眼抓不到。延迟超过 800ms 就记一条
+/// `[hung] 主线程阻塞约 Nms`，事后翻日志就知道卡了多久、在什么操作之后卡的。
+/// （正常运行这条日志一条都不该出现。）
+fn spawn_hung_probe(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let t0 = std::time::Instant::now();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = done.clone();
+        let dispatched = app
+            .run_on_main_thread(move || {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+            .is_ok();
+        if !dispatched {
+            return; // 主线程已退出（关闭应用）
+        }
+        while t0.elapsed() < std::time::Duration::from_secs(6) {
+            if done.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let ms = t0.elapsed().as_millis() as u64;
+        if ms > 800 {
+            diag(&format!("[hung] 主线程阻塞约 {ms}ms"));
+        }
+    });
+}
+
+/// 暂停 / 继续。由前端传入目标状态（true=暂停），后端执行 `set pause`。
+///
+/// ★ 不用 `cycle pause`：那样后端拿不到新状态（IPC 只回报命令是否成功），
+///   前端还得再问一次；直接 set 目标值，双方状态天然一致。
+#[tauri::command]
+fn set_pause(paused: bool, state: State<'_, AppState>) -> bool {
+    let v = if paused { "yes" } else { "no" };
+    if !state.player.cmd(&["set", "pause", v]) {
+        diag("[ui] 暂停指令未送达 mpv");
+    }
+    diag(&format!("[ui] 暂停={paused}"));
+    paused
+}
+
+/// 设置音量（0~100）。
+#[tauri::command]
+fn set_volume(v: i32, state: State<'_, AppState>) {
+    let v = v.clamp(0, 100);
+    let s = v.to_string();
+    state.player.cmd(&["set", "volume", &s]);
+}
+
+/// 画面适应方式：`fit` 适应（留黑边）/ `stretch` 拉伸 / `crop` 裁剪填满。
+#[tauri::command]
+fn set_fit(mode: String, state: State<'_, AppState>) {
+    // panscan=1 表示裁掉黑边填满；0 表示按比例适应。拉伸用 aspect 覆盖。
+    match mode.as_str() {
+        "stretch" => {
+            state.player.cmd(&["set", "panscan", "0"]);
+            state.player.cmd(&["set", "video-aspect-override", "no"]);
+        }
+        "crop" => {
+            state.player.cmd(&["set", "video-aspect-override", "no"]);
+            state.player.cmd(&["set", "panscan", "1"]);
+        }
+        _ => {
+            // fit（默认）
+            state.player.cmd(&["set", "panscan", "0"]);
+            state.player.cmd(&["set", "video-aspect-override", "no"]);
+        }
+    }
+    diag(&format!("[ui] 画面适应 -> {mode}"));
+}
+
+/// 当前频道节目单（本机源有；官网源通常为空）。
+#[tauri::command]
+fn now_epg() -> Vec<clean_tv_core::core::EpgItem> {
+    NOW_EPG
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone()
+}
+
+/// 底部控制条用的当前播放信息。
+#[derive(serde::Serialize)]
+struct NowInfo {
+    name: String,
+    src: String,
+    /// 当前线路序号（0 起）
+    index: usize,
+    /// 线路总数；未知时为 0
+    total: usize,
+    /// 是否允许手动切换线路（本机源且多线路）
+    can_switch: bool,
+}
+
+#[tauri::command]
+fn now_playing() -> NowInfo {
+    match now_get() {
+        Some(np) => NowInfo {
+            name: np.name,
+            src: np.src.clone(),
+            index: np.idx,
+            total: np.urls.len(),
+            // 官网源的「线路」是一个个网页地址，切换要重建 WebView2 并等出画，
+            // 语义与体验都不同，暂不在控制条开放，避免点了长时间黑屏。
+            can_switch: np.src == "local" && np.urls.len() > 1,
+        },
+        None => NowInfo {
+            name: String::new(),
+            src: String::new(),
+            index: 0,
+            total: 0,
+            can_switch: false,
+        },
+    }
+}
+
+/// 手动切换线路（`delta` = +1 下一条 / -1 上一条）。
+///
+/// ★ 复用已解密好的线路列表，**不再重新抓播放页**（省 1~3 秒）。
+/// ★ 仍然先解 302 再交给 mpv —— 直接喂 eplay2.php 会让首跳拖满看门狗。
+#[tauri::command]
+fn switch_line(delta: i32, app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let np = now_get().ok_or_else(|| "当前没有在播的频道".to_string())?;
+    if np.urls.len() <= 1 {
+        return Err("该频道只有一条线路".to_string());
+    }
+    let n = np.urls.len() as i32;
+    let next = ((np.idx as i32 + delta).rem_euclid(n)) as usize;
+    let url = np.urls[next].clone();
+    diag(&format!(
+        "[line] 手动切换 {}/{} -> {}/{}",
+        np.idx + 1,
+        n,
+        next + 1,
+        n
+    ));
+
+    let player = state.player.clone();
+    let host = state.host.clone();
+    let label = np.name.clone();
+    let urls = np.urls.clone();
+    // 立刻写回序号：前端连点也不会错位
+    now_update_lines(urls, next);
+
+    std::thread::spawn(move || {
+        let hwnd = host.ensure(0);
+        if hwnd == 0 {
+            let _ = app.emit("play-failed", format!("{label}：承载窗口创建失败"));
+            return;
+        }
+        // 解析 302 → CDN 真流（失败就退回原 URL，让 mpv 自己跟）
+        let real = clean_tv_core::net::resolve_stream_url(&url, 4000)
+            .ok()
+            .filter(|r| r != &url)
+            .unwrap_or_else(|| url.clone());
+        match play_first_ok(&player, hwnd, std::slice::from_ref(&real), &app, &label) {
+            Ok(_) => diag(&format!("[line] 已切到 {}/{}", next + 1, n)),
+            Err(e) => {
+                diag(&format!("[line] 切换失败 {}/{}: {e}", next + 1, n));
+                let _ = app.emit("play-failed", format!("{label}：线路 {} 不可用", next + 1));
+            }
+        }
+    });
+    Ok(())
+}
+
+/// 全屏开关。返回切换后的状态（true = 已全屏）。
+///
+/// ★ 前端同时给 body 加 `.fs` 类收起左侧列表 —— 两件事都做才是
+///   「点全屏就只剩画面」的效果。
+#[tauri::command]
+fn toggle_fullscreen(app: tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    let Some(win) = app.get_webview_window("main") else {
+        return false;
+    };
+    let now = win.is_fullscreen().unwrap_or(false);
+    let _ = win.set_fullscreen(!now);
+    diag(&format!("[ui] 全屏 -> {}", !now));
+    !now
 }
 
 /// 停止播放。
@@ -1503,6 +1758,10 @@ fn report_stage_rect(x: i32, y: i32, w: i32, h: i32, vw: i32, vh: i32,
             // ★ 缓存屏幕坐标：官网源 WebView2 直播窗要用它落在播放区。
             let mut guard = state.stage_rect.lock().unwrap_or_else(|p| p.into_inner());
             *guard = Some((px, py, pw, ph));
+            drop(guard);
+            // ★★ 官网源也在播时，直播窗必须跟着变 —— 否则进出全屏后画面
+            //   还是旧位置/旧尺寸（表现为「视频缩在中间一小块，四周全黑」）。
+            official_embed::sync_live_geometry(px, py, pw, ph);
             diag(&format!(
                 "[player] 播放区换算 css=({x},{y},{w},{h}) 视口={vw}x{vh} -> 屏幕=({px},{py},{pw},{ph})"
             ));
@@ -1751,6 +2010,19 @@ fn main() {
             );
             // let _ = win.with_webview(move |platform| probe.attach(platform));
             diag("[boot] 旁听已禁用（对照实验）");
+            spawn_hung_probe(app.handle().clone());
+            // ★ 自动化测试钩子：CLEAN_TV_AUTOFULLSCREEN=<秒> → 到点通知前端切全屏。
+            //   官网源的画面是独立 WebView2 窗口，无法用 CDP 点按钮（开 CDP 会让
+            //   直播窗建不出来），所以留这个钩子做「全屏后是否铺满」的验收。
+            if let Ok(v) = std::env::var("CLEAN_TV_AUTOFULLSCREEN") {
+                let secs = v.parse::<u64>().unwrap_or(15);
+                let ah = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(secs));
+                    diag(&format!("[test] 自动全屏触发（{secs}s）"));
+                    let _ = ah.emit("auto-fullscreen", ());
+                });
+            }
             diag("[boot] setup 完成");
             Ok(())
         })
@@ -1760,6 +2032,13 @@ fn main() {
             list_channels,
             play_channel,
             stop_channel,
+            now_playing,
+            switch_line,
+            toggle_fullscreen,
+            set_pause,
+            set_volume,
+            set_fit,
+            now_epg,
             report_stage_rect,
             env_flag,
             env_flag_src,

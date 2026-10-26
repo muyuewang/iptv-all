@@ -89,7 +89,14 @@ impl Player {
         if let Ok(mut g) = self.proc.lock() {
             if let Some(mut p) = g.take() {
                 let _ = p.kill();
-                let _ = p.wait();
+                // ★★ 不在这里 `wait()` —— 本函数会被 `play_channel` / `stop_channel`
+                //   这类**同步命令**调用，而同步命令跑在主线程上。等 mpv 彻底退出
+                //   通常几十毫秒，但 mpv 正在释放 GPU/解码器时可达数百毫秒到数秒，
+                //   期间主线程收不了窗口消息 → Windows 直接把窗口标成「无响应」。
+                //   进程回收放到后台线程，句柄由 Child 自己管理。
+                std::thread::spawn(move || {
+                    let _ = p.wait();
+                });
             }
         }
     }

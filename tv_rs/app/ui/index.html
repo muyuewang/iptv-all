@@ -80,8 +80,8 @@
   .selbar select option { background: #181a24; color: var(--fg); }
   #chans { flex: 1 1 auto; overflow-y: auto; margin: 0; padding: 8px; list-style: none; }
   #chans li {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 12px; border-radius: 8px; margin-bottom: 4px; cursor: pointer;
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 9px; border-radius: 7px; margin-bottom: 2px; cursor: pointer;
     background: transparent; border: 1px solid transparent;
   }
   #chans li:hover { background: var(--panel); }
@@ -95,8 +95,29 @@
     font-family: ui-monospace, monospace;
     background: linear-gradient(135deg, var(--hi), var(--lo)); color: #fff;
   }
+  /* ── 频道彩色方块（对齐参考 UI：CCTV 显示台号，其它显示首字）── */
+  .tile {
+    width: 24px; height: 24px; border-radius: 6px; flex: 0 0 auto;
+    display: grid; place-items: center;
+    color: #fff; font-size: 11.5px; font-weight: 600;
+    letter-spacing: -.2px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+  }
+  /* 收藏星：默认淡，已收藏高亮，hover 放大一点 */
+  .star {
+    flex: 0 0 auto; width: 22px; text-align: center;
+    color: #4a4f61; font-size: 14px; cursor: pointer;
+    transition: color .15s, transform .15s;
+  }
+  .star:hover { color: var(--fg); transform: scale(1.15); }
+  .star.on { color: #ffc53d; }
   .name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dim { color: var(--fg-dim); font-size: 12px; }
+  .chinfo {
+    color: var(--fg-dim); font-size: 12px; margin-right: 14px;
+    font-family: ui-monospace, Consolas, monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 
   /* ── 右侧播放区（黑视频区） ── */
   section { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
@@ -106,7 +127,23 @@
   }
   .stage .ph {
     color: var(--fg-dim); font-size: 15px; text-align: center; line-height: 2;
+    /* ★ 频道刚点下去时不要「啪」地弹出一行字：淡入 + 轻微上浮，观感连贯 */
+    animation: phIn .34s cubic-bezier(.22,.61,.36,1) both;
   }
+  @keyframes phIn {
+    from { opacity: 0; transform: translateY(10px) scale(.985); }
+    to   { opacity: 1; transform: none; }
+  }
+  /* 旋转指示器：只在新频道加载中显示（初始「点左侧频道」占位不带） */
+  .spin {
+    width: 26px; height: 26px; margin: 0 auto 16px;
+    border: 2px solid rgba(255,255,255,.13);
+    border-top-color: var(--hi);
+    border-right-color: var(--lo);
+    border-radius: 50%;
+    animation: spin .9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .stage .ph b {
     display: block; font-size: 22px;
     background: linear-gradient(90deg, var(--hi), var(--lo));
@@ -118,6 +155,93 @@
     font-family: ui-monospace, Consolas, monospace;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+
+  /* ── 底部控制条（频道名 / 线路切换 / 全屏）──────────────────────────
+     ★ 位置说明：它紧贴 .stage 下方、**不在**播放区内部。
+       本机源是 mpv 原生子窗口、官网源是 WebView2 直播窗，两者都会盖住
+       播放区里的 HTML；控制条放在播放区之外才点得到。 */
+  .ctrl {
+    flex: 0 0 auto; height: 46px;
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 14px;
+    border-top: 1px solid var(--line);
+    background: #14161f;
+    font-size: 12.5px; color: var(--fg-dim);
+    user-select: none;
+  }
+  .c-l { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+  .cdot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #4b5063; flex: 0 0 auto; transition: background .2s, box-shadow .2s;
+  }
+  .cdot.on { background: var(--hi); box-shadow: 0 0 7px var(--hi); }
+  .cname {
+    color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cstat { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-m { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .cline {
+    min-width: 78px; text-align: center;
+    font-family: ui-monospace, Consolas, monospace;
+  }
+  .cbtn {
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+    border-radius: 7px; height: 27px; min-width: 28px; padding: 0 9px;
+    font-size: 12.5px; line-height: 1; cursor: pointer;
+    transition: border-color .15s, color .15s, opacity .15s;
+  }
+  .cbtn:hover:not(:disabled) { border-color: var(--hi); color: var(--hi); }
+  .cbtn:disabled { opacity: .35; cursor: default; }
+  .cbtn.wide { padding: 0 13px; }
+  /* 全屏时收起顶栏和左侧列表，只留画面 + 控制条 */
+  body.fs header, body.fs aside { display: none; }
+
+  /* ── 控制条扩展：音量 / 画面适应 / 节目单 ── */
+  .vol { display: flex; align-items: center; gap: 6px; }
+  .vol input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 84px; height: 4px; border-radius: 2px;
+    background: #2b2f3d; outline: none; cursor: pointer;
+  }
+  .vol input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--hi); border: none; cursor: pointer;
+  }
+  select.cbtn { padding: 0 6px; height: 27px; }
+  select.cbtn option { background: #181a24; color: var(--fg); }
+  .c-r { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+
+  /* ── 节目单弹层 ── */
+  .epg-mask {
+    position: fixed; inset: 0; z-index: 9998;
+    background: rgba(0,0,0,.55);
+    display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: 60px;
+  }
+  .epg-card {
+    width: min(520px, 88vw); max-height: 62vh; display: flex; flex-direction: column;
+    border-radius: 14px; background: #171926; border: 1px solid var(--line);
+    box-shadow: 0 16px 48px rgba(0,0,0,.55); color: var(--fg);
+  }
+  .epg-head {
+    padding: 14px 18px 10px; font-size: 15px; font-weight: 600;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .epg-head span { font-size: 12px; color: var(--fg-dim); font-weight: 400; }
+  .epg-body { overflow-y: auto; padding: 8px 10px 12px; }
+  .epg-row {
+    display: flex; gap: 12px; padding: 8px 10px; border-radius: 8px;
+    font-size: 13px; line-height: 1.5;
+  }
+  .epg-row:nth-child(odd) { background: rgba(255,255,255,.025); }
+  .epg-row .t {
+    flex: 0 0 52px; color: var(--hi);
+    font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+  }
+  .epg-row .n { flex: 1 1 auto; color: var(--fg); }
+  .epg-empty { padding: 26px 0; text-align: center; color: var(--fg-dim); font-size: 13px; }
 
   /* ── 线路耗尽弹窗（本机源 / 官网源各自独立） ── */
   .exhaust-mask {
@@ -160,6 +284,7 @@
       <span class="src" data-src="official">官网源</span>
     </div>
     <span class="spacer"></span>
+    <span class="chinfo" id="chinfo"></span>
     <span class="ver" id="ver">加载中…</span>
   </header>
 
@@ -181,9 +306,46 @@
           <span>点左侧频道开始播放</span>
         </div>
       </div>
-      <div class="info" id="info">数据层版本 —</div>
+      <div class="ctrl" id="ctrl">
+        <div class="c-l">
+          <span class="cdot" id="cdot"></span>
+          <span class="cname" id="cname">未播放</span>
+          <span class="cstat" id="cstat"></span>
+        </div>
+        <div class="c-m">
+          <button class="cbtn wide" id="fsBtn" title="全屏（F11）">⛶ 全屏</button>
+          <button class="cbtn wide" id="epgBtn" title="节目单">节目单</button>
+          <div class="vol">
+            <button class="cbtn" id="muteBtn" title="静音">🔊</button>
+            <input type="range" id="volRange" min="0" max="100" value="80" title="音量">
+          </div>
+          <select class="cbtn" id="fitSel" title="画面适应">
+            <option value="fit">画面适应</option>
+            <option value="crop">裁剪填满</option>
+            <option value="stretch">拉伸铺满</option>
+          </select>
+        </div>
+        <div class="c-r">
+          <button class="cbtn wide" id="linePrev" title="上一条线路（←）">◀ 上一线路</button>
+          <button class="cbtn wide" id="pauseBtn" title="暂停 / 继续（空格）">⏸ 暂停</button>
+          <button class="cbtn wide" id="lineNext" title="下一条线路（→）">下一线路 ▶</button>
+          <span class="cline" id="cline">—</span>
+          <button class="cbtn" id="favBtn" title="收藏本频道">☆</button>
+        </div>
+      </div>
     </section>
   </main>
+
+  <!-- 节目单弹层（默认隐藏） -->
+  <div class="epg-mask" id="epgMask" style="display:none">
+    <div class="epg-card">
+      <div class="epg-head">
+        <span id="epgTitle">节目单</span>
+        <span id="epgSub"></span>
+      </div>
+      <div class="epg-body" id="epgBody"></div>
+    </div>
+  </div>
 
 <script>
   // ★ 顶部自检：不依赖 __TAURI__，先确认页面加载 + __TAURI__ 是否注入。
@@ -286,30 +448,89 @@
     }
   }
 
+  // ── 频道方块配色：按序号循环取色（对齐参考 UI 的多彩效果）──
+  const TILE_COLORS = [
+    '#22b8cf', '#4c6ef5', '#e03131', '#2f9e44', '#f08c00',
+    '#7048e8', '#0ca678', '#c2255c', '#74b816', '#1971c2',
+  ];
+
+  /// 方块里的字：CCTV-N 取台号，其余取首字（去掉括号里的补充说明）。
+  function tileText(name) {
+    const s = String(name || '?').replace(/[（(].*?[)）]/g, '').trim();
+    const m = s.match(/CCTV[-\s]?(\d+)/i);
+    if (m) return m[1];
+    if (/CGTN/i.test(s)) return 'G';
+    return s.charAt(0) || '?';
+  }
+
+  // ── 收藏（本地持久化，跨源用 tid+id 标识）──
+  const FAV_KEY = 'ctv_favs_v1';
+  function favArr() {
+    try { return JSON.parse(localStorage.getItem(FAV_KEY) || '[]'); } catch (e) { return []; }
+  }
+  function isFav(tid, id) {
+    return favArr().some((f) => f.tid === tid && String(f.id) === String(id));
+  }
+  function toggleFav(tid, id, name) {
+    const a = favArr();
+    const i = a.findIndex((f) => f.tid === tid && String(f.id) === String(id));
+    if (i >= 0) a.splice(i, 1);
+    else a.unshift({ tid, id, name });
+    try { localStorage.setItem(FAV_KEY, JSON.stringify(a)); } catch (e) { /* 忽略 */ }
+    return i < 0;
+  }
+
   function renderChans(chans) {
     const list = document.getElementById('chans');
     if (!chans || !chans.length) {
       list.innerHTML = '<li class="dim">（空）</li>';
       return;
     }
-    list.innerHTML = chans.map((c, i) =>
-      `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}" data-tid="${esc(curTid)}">
-         <span class="idx">${i + 1}</span>
+    list.innerHTML = chans.map((c, i) => {
+      const fav = isFav(curTid, c.id) ? ' on' : '';
+      const color = TILE_COLORS[i % TILE_COLORS.length];
+      return `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}" data-tid="${esc(curTid)}">
+         <span class="tile" style="background:${color}">${esc(tileText(c.name))}</span>
          <span class="name">${esc(c.name)}</span>
-       </li>`
-    ).join('');
-    list.querySelectorAll('li').forEach((node) =>
+         <span class="star${fav}" title="收藏">${fav ? '★' : '☆'}</span>
+       </li>`;
+    }).join('');
+    // 顶栏信息：源 · 分组 · 频道数（对齐参考 UI 右上角那行）
+    const ci = document.getElementById('chinfo');
+    if (ci) {
+      const sel = document.getElementById('catsel');
+      const gname = sel && sel.selectedOptions && sel.selectedOptions[0]
+        ? sel.selectedOptions[0].textContent : '';
+      ci.textContent = `${curSrc === 'official' ? '官网源' : '本机源'}`
+        + (gname ? ` · ${gname}` : '')
+        + ` · ${chans.length} 个频道`;
+    }
+
+    list.querySelectorAll('li').forEach((node) => {
+      // 星标：只切收藏，不触发播放
+      const star = node.querySelector('.star');
+      if (star) {
+        star.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const on = toggleFav(node.dataset.tid, node.dataset.id, node.dataset.name);
+          star.classList.toggle('on', on);
+          star.textContent = on ? '★' : '☆';
+          syncFavBtn();
+        });
+      }
       node.addEventListener('click', () => {
         list.querySelectorAll('li').forEach((n) => n.classList.remove('on'));
         node.classList.add('on');
+        syncFavBtn();
         play(node.dataset.id, node.dataset.name);
-      })
-    );
+      });
+    });
     maybeAutoplay();
   }
 
-  // 当前播放频道名（play-failed 事件回推时定位 UI 用）。
+  // 当前播放频道名 / id（play-failed 回推定位、收藏判断都用）。
   let curPlayName = '';
+  let curPlayId = '';
 
   // ★★ 把播放区（#stage）在**视口内**的位置上报给后端。
   // mpv 播在独立的承载窗口里（不能直接嵌主窗口：WebView2 会把视频整块盖住，
@@ -348,40 +569,223 @@
     }
   } catch (e) { /* 忽略 */ }
 
+  // ── 底部控制条：频道名 / 线路切换 / 全屏 ──────────────────────────
+  const C = {
+    dot: document.getElementById('cdot'),
+    name: document.getElementById('cname'),
+    stat: document.getElementById('cstat'),
+    line: document.getElementById('cline'),
+    prev: document.getElementById('linePrev'),
+    next: document.getElementById('lineNext'),
+    fs: document.getElementById('fsBtn'),
+    pause: document.getElementById('pauseBtn'),
+    epg: document.getElementById('epgBtn'),
+    mute: document.getElementById('muteBtn'),
+    vol: document.getElementById('volRange'),
+    fit: document.getElementById('fitSel'),
+    fav: document.getElementById('favBtn'),
+  };
+
+  function ctrlSet(stat, playing) {
+    if (C.stat) C.stat.textContent = stat || '';
+    if (C.dot) C.dot.classList.toggle('on', !!playing);
+  }
+
+  /// 从后端拉一次当前播放信息（线路 x/y、能否切换）。
+  async function ctrlRefresh() {
+    try {
+      const n = await invoke('now_playing');
+      if (C.name) C.name.textContent = n.name || '未播放';
+      if (C.line) {
+        if (n.total > 0) C.line.textContent = `线路 ${n.index + 1}/${n.total}`;
+        else if (n.src === 'official') C.line.textContent = '官网源';
+        else C.line.textContent = '—';
+      }
+      if (C.prev) C.prev.disabled = !n.can_switch;
+      if (C.next) C.next.disabled = !n.can_switch;
+    } catch (e) { /* 控制条出错不能影响播放 */ }
+  }
+
+  async function switchLine(delta) {
+    try {
+      ctrlSet('切换线路…', false);
+      await invoke('switch_line', { delta });
+      // 结果由 play-started / play-failed 事件回推后刷新
+    } catch (e) {
+      ctrlSet(String(e).slice(0, 60), false);
+    }
+  }
+
+  async function toggleFs() {
+    try {
+      const on = await invoke('toggle_fullscreen');
+      document.body.classList.toggle('fs', !!on);
+      if (C.fs) C.fs.textContent = on ? '⛶ 退出全屏' : '⛶ 全屏';
+      // ★ 全屏改变播放区几何 → 必须重新上报，mpv 承载窗 / 官网直播窗要跟着变。
+      //   两次是有意的：一次赶在布局完成，一次兜住窗口尺寸动画结束。
+      setTimeout(() => { reportStageRect(); }, 120);
+      setTimeout(() => { reportStageRect(); }, 420);
+    } catch (e) { /* 忽略 */ }
+  }
+
+  // 自动化测试钩子（CLEAN_TV_AUTOFULLSCREEN）：后端到点回推，直接切全屏
+  try {
+    window.__TAURI__.event.listen('auto-fullscreen', () => { toggleFs(); });
+  } catch (e) { /* 忽略 */ }
+
+  if (C.prev) C.prev.onclick = () => switchLine(-1);
+  if (C.next) C.next.onclick = () => switchLine(1);
+  if (C.fs) C.fs.onclick = toggleFs;
+
+  // ── 暂停 / 音量 / 静音 / 画面适应 ────────────────────────────────
+  let pausedNow = false;
+  let mutedNow = false;
+  let lastVol = 80;
+
+  async function setPause(on) {
+    pausedNow = !!on;
+    if (C.pause) C.pause.textContent = pausedNow ? '▶ 继续' : '⏸ 暂停';
+    try { await invoke('set_pause', { paused: pausedNow }); } catch (e) { /* 忽略 */ }
+  }
+
+  function syncMuteIcon() {
+    if (C.mute) C.mute.textContent = mutedNow ? '🔇' : '🔊';
+  }
+
+  if (C.pause) C.pause.onclick = () => setPause(!pausedNow);
+
+  if (C.vol) {
+    C.vol.oninput = () => {
+      const v = Number(C.vol.value);
+      lastVol = v;
+      mutedNow = v === 0;
+      syncMuteIcon();
+      invoke('set_volume', { v }).catch(() => {});
+    };
+    // 启动即给 mpv 一个初始音量，避免沿用系统默认导致过响/过轻
+    invoke('set_volume', { v: Number(C.vol.value) }).catch(() => {});
+  }
+  if (C.mute) {
+    C.mute.onclick = () => {
+      mutedNow = !mutedNow;
+      const v = mutedNow ? 0 : (lastVol || 80);
+      if (C.vol) C.vol.value = String(v);
+      syncMuteIcon();
+      invoke('set_volume', { v }).catch(() => {});
+    };
+  }
+  if (C.fit) {
+    C.fit.onchange = () => {
+      invoke('set_fit', { mode: C.fit.value }).catch(() => {});
+    };
+  }
+
+  // ── 收藏（当前频道）─────────────────────────────────────────────
+  function syncFavBtn() {
+    if (!C.fav) return;
+    const on = curTid && curPlayId && isFav(curTid, curPlayId);
+    C.fav.textContent = on ? '★' : '☆';
+    C.fav.style.color = on ? '#ffc53d' : '';
+  }
+  if (C.fav) {
+    C.fav.onclick = () => {
+      if (!curTid || !curPlayId) return;
+      const on = toggleFav(curTid, curPlayId, curPlayName);
+      syncFavBtn();
+      // 列表里的星标同步
+      const li = document.querySelector(`#chans li[data-id="${CSS.escape(String(curPlayId))}"]`);
+      const star = li && li.querySelector('.star');
+      if (star) {
+        star.classList.toggle('on', on);
+        star.textContent = on ? '★' : '☆';
+      }
+    };
+  }
+
+  // ── 节目单弹层 ─────────────────────────────────────────────────
+  async function openEpg() {
+    const mask = document.getElementById('epgMask');
+    const body = document.getElementById('epgBody');
+    const sub = document.getElementById('epgSub');
+    if (!mask || !body) return;
+    mask.style.display = 'flex';
+    if (sub) sub.textContent = curPlayName || '';
+    body.innerHTML = '<div class="epg-empty">正在获取节目单…</div>';
+    try {
+      const list = await invoke('now_epg');
+      if (!list || !list.length) {
+        body.innerHTML = '<div class="epg-empty">该频道暂无节目单（官网源不提供）</div>';
+        return;
+      }
+      body.innerHTML = list.map((it) =>
+        `<div class="epg-row"><span class="t">${esc(it.time)}</span><span class="n">${esc(it.name)}</span></div>`
+      ).join('');
+    } catch (e) {
+      body.innerHTML = `<div class="epg-empty">获取失败：${esc(String(e))}</div>`;
+    }
+  }
+  if (C.epg) C.epg.onclick = openEpg;
+  {
+    const mask = document.getElementById('epgMask');
+    if (mask) mask.addEventListener('click', (e) => {
+      if (e.target === mask) mask.style.display = 'none';   // 点遮罩关闭
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target && e.target.tagName) || '';
+    const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(tag);
+    if (e.key === 'F11') { e.preventDefault(); toggleFs(); }
+    else if (!typing && e.key === 'Escape') {
+      const mask = document.getElementById('epgMask');
+      if (mask && mask.style.display !== 'none') mask.style.display = 'none';
+    }
+    else if (!typing && e.key === ' ') { e.preventDefault(); setPause(!pausedNow); }
+    else if (!typing && e.key === 'ArrowLeft') { switchLine(-1); }
+    else if (!typing && e.key === 'ArrowRight') { switchLine(1); }
+  });
+
   async function play(id, name) {
     const stage = document.getElementById('stage');
-    const info = document.getElementById('info');
     curPlayName = name;
+    curPlayId = id;
+    // 换台视为新的播放会话：暂停态归零，收藏按钮跟着刷新
+    pausedNow = false;
+    if (C.pause) C.pause.textContent = '⏸ 暂停';
+    syncFavBtn();
+    if (C.name) C.name.textContent = name;
+    ctrlSet('', false);
     // ★ 先上报播放区几何（承载窗口要落在这一块）。
     await reportStageRect();
     if (curSrc === 'official') {
       // 官网源：直连缓存命中零网络即播；网页线路频道自动按名切备用源。
       stage.innerHTML =
-        `<div class="ph"><b>${esc(name)}</b><span>正在加载官网源线路…</span></div>`;
-      info.textContent = '正在加载官网源线路，画面稍后自动出现…';
+        `<div class="ph"><div class="spin"></div><b>${esc(name)}</b><span>正在加载官网源线路…</span></div>`;
+      ctrlSet('正在加载官网源线路…', false);
     } else {
       // 本机源：抓播放页 XOR 解密出直链（约 1~3 秒），后台线程执行。
       stage.innerHTML =
-        `<div class="ph"><b>${esc(name)}</b><span>实时获取播放线路中…</span></div>`;
-      info.textContent = '正在获取本机源线路（约 1~3 秒），画面稍后自动出现…';
+        `<div class="ph"><div class="spin"></div><b>${esc(name)}</b><span>实时获取播放线路中…</span></div>`;
+      ctrlSet('正在获取本机源线路（约 1~3 秒）…', false);
     }
     try {
       const r = await invoke('play_channel', { tid: curTid, cid: id, name: name });
       if (r.ok && (r.msg === 'streaming' || r.msg === 'fallback-streaming')) {
         // 后台取流中：成功 mpv 自动接管画面，失败走 play-failed 事件，这里不终态。
-        info.textContent = r.msg === 'fallback-streaming'
-          ? '该频道无直连，已自动切换备用线路，获取中…'
-          : '正在实时获取播放线路，画面稍后自动出现…';
+        ctrlSet(r.msg === 'fallback-streaming'
+          ? '该频道无直连，已切备用线路，获取中…'
+          : '正在获取播放线路…', false);
         return;
       }
-      info.textContent = r.ok
-        ? `正在播放第 ${r.index + 1}/${r.total} 条线路`
-        : `播放失败：${r.msg || '无线路'}`;
+      ctrlSet(r.ok
+        ? `线路 ${r.index + 1}/${r.total} · 已接管画面`
+        : `播放失败：${r.msg || '无线路'}`, r.ok);
       stage.innerHTML = r.ok
-        ? `<div class="ph"><b>${esc(name)}</b><span>线路 ${r.index + 1}/${r.total} · mpv 已接管画面</span></div>`
+        ? ''
         : `<div class="ph"><b>${esc(name)}</b><span>播放失败</span></div>`;
+      if (r.ok) ctrlRefresh();
     } catch (e) {
-      info.textContent = `播放失败：${e}`;
+      ctrlSet(`播放失败：${e}`, false);
       stage.innerHTML =
         `<div class="ph"><b>${esc(name)}</b><span>播放失败：${esc(e)}</span></div>`;
     }
@@ -392,7 +796,7 @@
     window.__TAURI__.event.listen('play-failed', (ev) => {
       const msg = String(ev.payload ?? '');
       const name = curPlayName || '频道';
-      document.getElementById('info').textContent = `播放失败：${msg}`;
+      ctrlSet(`播放失败：${msg}`, false);
       document.getElementById('stage').innerHTML =
         `<div class="ph"><b>${esc(name)}</b><span>播放失败：${esc(msg)}</span></div>`;
     });
@@ -406,13 +810,14 @@
     window.__TAURI__.event.listen('play-started', (ev) => {
       const name = String(ev.payload ?? '') || curPlayName || '';
       const stage = document.getElementById('stage');
-      const info = document.getElementById('info');
       if (stage) {
         const ph = stage.querySelector('.ph');
         // 只清占位，不动别的内容
         if (ph) ph.remove();
       }
-      if (info) info.textContent = name ? `正在播放：${name}` : '正在播放';
+      if (name && C.name) C.name.textContent = name;
+      ctrlSet('播放中', true);
+      ctrlRefresh();   // 出画后才知道总线路数，这里补上「线路 x/y」
     });
   } catch (e) { console.error('play-started 监听注册失败', e); }
 
@@ -565,8 +970,8 @@
       const info = await invoke('app_info');
       document.getElementById('ver').textContent =
         `v${info.app_version} · ${info.profile}`;
-      document.getElementById('info').textContent =
-        `数据层版本 ${info.core_version} · 编译目标 ${info.target} · 构建 ${info.profile}`;
+      // 数据层信息不再占底部控制条（那里要放按钮），只在标题栏提示版本
+      if (C.stat && !C.stat.textContent) C.stat.textContent = '';
     } catch (e) {
       document.getElementById('ver').textContent = `IPC 失败: ${e}`;
     }
