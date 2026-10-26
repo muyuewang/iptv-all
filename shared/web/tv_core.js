@@ -164,11 +164,24 @@
       // 用第 1 条线路的已知明文反推 XOR key
       var s0 = b64d(opts[0].split("").reverse().join(""));
       if (!s0) return [];
-      var url0 = API + "/eplay2.php?token=" + OLD + "&tid=" + tid + "&id=" + id + "&p=0&type=.flv";
-      var out0 = b64e(url0);
-      if (s0.length !== out0.length) return [];
-      var key = [];
-      for (var j = 0; j < s0.length; j++) key.push(s0.charCodeAt(j) ^ out0.charCodeAt(j));
+      // ★★ 两个候选明文模板都必须试（与 core.py / core.rs 对齐）：
+      //   源站对**部分频道**（湖南/广州系、CCTV 付费频道、CETV、部分地方卫视、
+      //   港澳台卫视…）的第 1 条线路明文**少了 `&type=.flv`**，
+      //   标准模板 base64 后 136 字节而密文只 124 字节 → 长度对不上 → 反推失败，
+      //   整个频道一条线路都解不出（表现就是「线路解析失败」）。
+      var cands = [
+        API + "/eplay2.php?token=" + OLD + "&tid=" + tid + "&id=" + id + "&p=0&type=.flv",
+        API + "/eplay2.php?token=" + OLD + "&tid=" + tid + "&id=" + id + "&p=0"
+      ];
+      var key = null;
+      for (var ci = 0; ci < cands.length; ci++) {
+        var out0 = b64e(cands[ci]);
+        if (s0.length !== out0.length) continue;
+        key = [];
+        for (var j = 0; j < s0.length; j++) key.push(s0.charCodeAt(j) ^ out0.charCodeAt(j));
+        break;
+      }
+      if (!key) return [];
 
       var urls = [];
       for (var k = 0; k < opts.length; k++) {

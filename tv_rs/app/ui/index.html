@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<title>纯净电视 · Rust</title>
+<title>纯净电视直播</title>
 <style>
   :root {
     --bg-top: #181a24;
@@ -25,49 +25,59 @@
   }
   body { display: flex; flex-direction: column; }
 
-  /* 顶栏 */
+  /* ── 顶栏（还原早前 exe：58px 高，标题 + 源切换 + 版本） ── */
   header {
     display: flex; align-items: center; gap: 14px;
-    padding: 12px 18px; border-bottom: 1px solid var(--line);
-    flex: 0 0 auto;
-  }
-  h1 {
-    margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .3px;
-    background: linear-gradient(90deg, var(--hi), var(--lo));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
+    padding: 0 18px; height: 58px;
+    border-bottom: 1px solid var(--line);
+    flex: 0 0 58px;
   }
   .brand-dot {
     width: 10px; height: 10px; border-radius: 50%;
     background: linear-gradient(135deg, var(--hi), var(--lo));
     flex: 0 0 auto;
   }
-  .ver { color: var(--fg-dim); font-size: 12px; }
-
-  /* 主体：左列表 + 右播放区 */
-  main { flex: 1 1 auto; display: flex; min-height: 0; }
-
-  /* 左侧频道列表 */
-  aside {
-    width: 260px; flex: 0 0 auto;
-    display: flex; flex-direction: column;
-    border-right: 1px solid var(--line);
-    min-height: 0;
+  h1 {
+    margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .3px;
+    background: linear-gradient(90deg, var(--hi), var(--lo));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    white-space: nowrap;
   }
-  .cats {
-    display: flex; gap: 6px; padding: 10px 12px;
-    border-bottom: 1px solid var(--line); flex: 0 0 auto;
-    overflow-x: auto;
+  /* 数据源切换：官网源 / 本机源（PillBar，自绘选中标记） */
+  .srcbar {
+    display: flex; gap: 4px; margin-left: 20px;
+    background: var(--panel); border-radius: 10px; padding: 4px;
   }
-  .cat {
-    padding: 4px 14px; border-radius: 999px; cursor: pointer;
-    font-size: 13px; color: var(--fg-dim); white-space: nowrap;
-    border: 1px solid transparent; background: var(--panel);
-    user-select: none;
+  .src {
+    padding: 4px 18px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; color: var(--fg-dim); white-space: nowrap; user-select: none;
   }
-  .cat.active {
-    color: #fff; border-color: transparent;
+  .src.active {
+    color: #fff;
     background: linear-gradient(135deg, var(--hi), var(--lo));
   }
+  .spacer { flex: 1 1 auto; }
+  .ver { color: var(--fg-dim); font-size: 12px; }
+
+  /* ── 主体：左列表(344px) + 右播放区 ── */
+  main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  aside {
+    width: 344px; flex: 0 0 344px;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--line);
+    min-height: 0; background: rgba(0,0,0,.08);
+  }
+  /* 分类/分组选择器（下拉） */
+  .selbar { padding: 12px 12px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .selrow { display: flex; align-items: center; gap: 8px; }
+  .sellabel { color: var(--fg-dim); font-size: 13px; flex: 0 0 auto; }
+  .selbar select {
+    flex: 1 1 auto; min-width: 0; padding: 8px 10px; border-radius: 8px;
+    background: var(--panel); color: var(--fg);
+    border: 1px solid var(--line); font-size: 13px; outline: none;
+  }
+  .selbar select option { background: #181a24; color: var(--fg); }
   #chans { flex: 1 1 auto; overflow-y: auto; margin: 0; padding: 8px; list-style: none; }
   #chans li {
     display: flex; align-items: center; gap: 10px;
@@ -88,14 +98,11 @@
   .name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dim { color: var(--fg-dim); font-size: 12px; }
 
-  /* 右侧播放区 */
-  section {
-    flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0;
-  }
+  /* ── 右侧播放区（黑视频区） ── */
+  section { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
   .stage {
     flex: 1 1 auto; display: grid; place-items: center;
-    position: relative; min-height: 0;
-    background: #000;
+    position: relative; min-height: 0; background: #000;
   }
   .stage .ph {
     color: var(--fg-dim); font-size: 15px; text-align: center; line-height: 2;
@@ -111,27 +118,67 @@
     font-family: ui-monospace, Consolas, monospace;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+
+  /* ── 线路耗尽弹窗（本机源 / 官网源各自独立） ── */
+  .exhaust-mask {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,.55);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .exhaust-card {
+    width: min(360px, 86vw); padding: 22px 22px 18px;
+    border-radius: 14px; background: #1a1c27;
+    border: 1px solid var(--line);
+    box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    color: var(--fg);
+  }
+  .exhaust-card b {
+    display: block; font-size: 17px; margin-bottom: 8px;
+    background: linear-gradient(90deg, var(--hi), var(--lo));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .exhaust-card p { margin: 0 0 6px; color: var(--fg-dim); font-size: 13px; line-height: 1.7; }
+  .exhaust-card .btns { display: flex; gap: 10px; margin-top: 16px; }
+  .exhaust-card button {
+    flex: 1 1 auto; padding: 9px 0; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--panel); color: var(--fg); font-size: 14px; cursor: pointer;
+  }
+  .exhaust-card button:hover { background: rgba(255,255,255,.08); }
+  .exhaust-card button.primary {
+    border: none; color: #fff; font-weight: 600;
+    background: linear-gradient(135deg, var(--hi), var(--lo));
+  }
 </style>
 </head>
 <body>
   <header>
     <span class="brand-dot"></span>
-    <h1>纯净电视 · Rust</h1>
+    <h1>纯净电视直播</h1>
+    <!-- 数据源切换（对齐早前 desktop）：本机源（api 分类）/ 官网源（cctv·央视频·地方 分组） -->
+    <div class="srcbar" id="srcbar">
+      <span class="src active" data-src="local">本机源</span>
+      <span class="src" data-src="official">官网源</span>
+    </div>
+    <span class="spacer"></span>
     <span class="ver" id="ver">加载中…</span>
   </header>
 
   <main>
     <aside>
-      <div class="cats" id="cats"></div>
+      <div class="selbar">
+        <div class="selrow">
+          <span class="sellabel" id="selLabel">分类</span>
+          <select id="catsel"></select>
+        </div>
+      </div>
       <ul id="chans"><li class="dim">加载中…</li></ul>
     </aside>
 
     <section>
       <div class="stage" id="stage">
         <div class="ph">
-          <b>Pure TV · Rust</b>
-          <span>选中左侧频道即可播放</span><br>
-          <span>直连线路由 mpv 内嵌硬解</span>
+          <b>纯净电视直播</b>
+          <span>点左侧频道开始播放</span>
         </div>
       </div>
       <div class="info" id="info">数据层版本 —</div>
@@ -152,42 +199,93 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-  let curTid = 'tv';
+  // 数据源维度（与后端 Category.src 对齐，见早前 desktop 的两源结构）：
+  //   local    = 本机源（api 分类：综合/体育/央视/卫视/极速港澳台/港澳台）
+  //   official = 官网源（WebViewTvLive 分组：央视/央视数字/国家/… 共 51 组）
+  let curSrc = 'local';
+  let curTid = '';          // 分类 tid（本机源=裸 tid，官网源=`w|分组`）
+  let autoplayFired = false;
+
+  // 分类数据（缓存，供切源时重建下拉）。
+  let catsBySrc = { local: [], official: [] };
+
+  // 选择器左侧文字：本机源叫「分类」、官网源叫「分组」（对齐旧版）。
+  function selLabelText() { return curSrc === 'official' ? '分组' : '分类'; }
 
   async function loadCats() {
     try {
       const cats = await invoke('list_categories');
-      const el = document.getElementById('cats');
-      el.innerHTML = cats.map((c, i) =>
-        `<span class="cat${i === 0 ? ' active' : ''}" data-tid="${esc(c.tid)}">${esc(c.name)}</span>`
-      ).join('');
-      el.querySelectorAll('.cat').forEach((node) =>
-        node.addEventListener('click', () => {
-          el.querySelectorAll('.cat').forEach((n) => n.classList.remove('active'));
-          node.classList.add('active');
-          curTid = node.dataset.tid;
-          loadChans();
-        })
-      );
+      catsBySrc.local = cats.filter((c) => c.src === 'local');
+      catsBySrc.official = cats.filter((c) => c.src === 'official');
+      rebuildCats();
     } catch (e) {
-      document.getElementById('cats').innerHTML =
-        `<span class="dim">分类加载失败：${esc(e)}</span>`;
+      document.getElementById('catsel').innerHTML =
+        `<option>分类加载失败</option>`;
     }
   }
 
-  // 加载频道列表：同步命令直接返回（本 WebView2 环境只有同步 return 可靠，异步/轮询全失效）。
+  // 按当前源重建下拉，并选中该源第一个分类。数据未就绪时给诚实提示。
+  function rebuildCats() {
+    const sel = document.getElementById('catsel');
+    document.getElementById('selLabel').textContent = selLabelText();
+    const cats = curSrc === 'official' ? catsBySrc.official : catsBySrc.local;
+    if (!cats.length) {
+      sel.innerHTML = `<option>加载中…</option>`;
+      const list = document.getElementById('chans');
+      list.innerHTML = curSrc === 'official'
+        ? '<li class="dim">正在解密官网源频道表…<br>（GitHub 数据下载 + AES 解密，约数秒）</li>'
+        : '<li class="dim">正在连接本机源接口…<br>（镜像回退 + 后台自动重试）</li>';
+      curTid = '';
+      return;
+    }
+    sel.innerHTML = cats.map((c) =>
+      `<option value="${esc(c.tid)}">${esc(c.name)}</option>`
+    ).join('');
+    curTid = cats[0].tid;
+    loadChans();
+  }
+
+  function switchSrc(src) {
+    if (src === curSrc) return;
+    curSrc = src;
+    // ★ 切源瞬间清空频道列表并失效 curTid：loadCats 是异步的，残留的旧源列表
+    //   会被 autoplay/用户点击点到。清空后轮询自然等新源列表渲染。
+    curTid = '';
+    document.getElementById('chans').innerHTML = '<li class="dim">加载中…</li>';
+    document.querySelectorAll('#srcbar .src').forEach((n) =>
+      n.classList.toggle('active', n.dataset.src === src));
+    document.getElementById('selLabel').textContent = selLabelText();
+    // ★ 切源时重新拉一次分类：官网源分组由后台解密（可能比首屏晚到）。
+    loadCats();
+  }
+
   async function loadChans() {
     const list = document.getElementById('chans');
+    // ★ 过期渲染防护：记录发起时的分类，返回时若已切走则丢弃结果——
+    //   否则旧分类数据会带着新分类的 data-tid 渲染（renderChans 读全局 curTid）。
+    const tidAtStart = curTid;
     list.innerHTML = '<li class="dim">加载中…</li>';
-    try {
-      const chans = await invoke('list_channels', { tid: curTid });
-      renderChans(chans);
-    } catch (e) {
-      list.innerHTML = `<li class="dim">加载失败：${esc(e)}</li>`;
+    if (!curTid) { list.innerHTML = '<li class="dim">（空）</li>'; return; }
+    // ★ 预抓取在后台进行，提前打开分类会拿到「尚未预抓取完成」。
+    //   自动重试直到就绪（最多 30 次 × 1s），失败才放弃。
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        const chans = await invoke('list_channels', { tid: tidAtStart });
+        if (curTid !== tidAtStart) return;
+        renderChans(chans);
+        return;
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('尚未预抓取完成') && attempt < 29) {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
+        list.innerHTML = `<li class="dim">加载失败：${esc(msg)}</li>`;
+        return;
+      }
     }
   }
 
-  // 渲染频道列表。
   function renderChans(chans) {
     const list = document.getElementById('chans');
     if (!chans || !chans.length) {
@@ -195,7 +293,7 @@
       return;
     }
     list.innerHTML = chans.map((c, i) =>
-      `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}">
+      `<li data-id="${esc(c.id)}" data-name="${esc(c.name)}" data-tid="${esc(curTid)}">
          <span class="idx">${i + 1}</span>
          <span class="name">${esc(c.name)}</span>
        </li>`
@@ -207,18 +305,75 @@
         play(node.dataset.id, node.dataset.name);
       })
     );
-    // 自动化钩子：频道就绪后若设了 AUTOPLAY，播放第一个频道。
     maybeAutoplay();
   }
 
-  // 播放：同步命令直接返回结果（抓线路 + 起 mpv 同在命令内同步完成）。
+  // 当前播放频道名（play-failed 事件回推时定位 UI 用）。
+  let curPlayName = '';
+
+  // ★★ 把播放区（#stage）在**视口内**的位置上报给后端。
+  // mpv 播在独立的承载窗口里（不能直接嵌主窗口：WebView2 会把视频整块盖住，
+  // 表现为「有声音没图像」），那个窗口必须精确落在播放区上。
+  //
+  // ★ 只报 **CSS 像素的相对偏移** + 视口 CSS 尺寸，屏幕坐标换算交给 Rust：
+  //   JS 的 CSS 像素与 Win32 窗口坐标是两套空间（DPI 缩放），前端自己乘
+  //   devicePixelRatio 必然漂（125% 缩放下实测偏差正好一个 dpr）。
+  let lastRectKey = '';
+  async function reportStageRect() {
+    try {
+      const stage = document.getElementById('stage');
+      if (!stage) return;
+      const r = stage.getBoundingClientRect();
+      if (r.width < 16 || r.height < 16) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const x = Math.round(r.left);
+      const y = Math.round(r.top);
+      const w = Math.round(r.width);
+      const h = Math.round(r.height);
+      const key = `${x},${y},${w},${h},${vw},${vh}`;
+      if (key === lastRectKey) return;
+      lastRectKey = key;
+      await invoke('report_stage_rect', { x, y, w, h, vw, vh });
+    } catch (e) { /* 坐标上报失败不影响播放 */ }
+  }
+
+  // 播放区几何变化（窗口缩放/移动）时重新上报。
+  // ★ 注意：**顶层不能用 await**（脚本非 module，顶层 await 是语法错误，
+  //   会让整个前端脚本不执行 —— 表现为日志里连 boot:enter 都没有）。
+  try {
+    window.addEventListener('resize', () => { reportStageRect(); });
+    if (window.__TAURI__ && window.__TAURI__.window && window.__TAURI__.window.onMoved) {
+      window.__TAURI__.window.onMoved(() => { reportStageRect(); });
+    }
+  } catch (e) { /* 忽略 */ }
+
   async function play(id, name) {
     const stage = document.getElementById('stage');
     const info = document.getElementById('info');
-    stage.innerHTML =
-      `<div class="ph"><b>${esc(name)}</b><span>解析线路中…</span></div>`;
+    curPlayName = name;
+    // ★ 先上报播放区几何（承载窗口要落在这一块）。
+    await reportStageRect();
+    if (curSrc === 'official') {
+      // 官网源：直连缓存命中零网络即播；网页线路频道自动按名切备用源。
+      stage.innerHTML =
+        `<div class="ph"><b>${esc(name)}</b><span>正在加载官网源线路…</span></div>`;
+      info.textContent = '正在加载官网源线路，画面稍后自动出现…';
+    } else {
+      // 本机源：抓播放页 XOR 解密出直链（约 1~3 秒），后台线程执行。
+      stage.innerHTML =
+        `<div class="ph"><b>${esc(name)}</b><span>实时获取播放线路中…</span></div>`;
+      info.textContent = '正在获取本机源线路（约 1~3 秒），画面稍后自动出现…';
+    }
     try {
-      const r = await invoke('play_channel', { tid: curTid, cid: id });
+      const r = await invoke('play_channel', { tid: curTid, cid: id, name: name });
+      if (r.ok && (r.msg === 'streaming' || r.msg === 'fallback-streaming')) {
+        // 后台取流中：成功 mpv 自动接管画面，失败走 play-failed 事件，这里不终态。
+        info.textContent = r.msg === 'fallback-streaming'
+          ? '该频道无直连，已自动切换备用线路，获取中…'
+          : '正在实时获取播放线路，画面稍后自动出现…';
+        return;
+      }
       info.textContent = r.ok
         ? `正在播放第 ${r.index + 1}/${r.total} 条线路`
         : `播放失败：${r.msg || '无线路'}`;
@@ -232,66 +387,251 @@
     }
   }
 
-  let autoplayFired = false;
+  // 后台取流失败回推（789 取流在 Rust 后台线程执行，命令已先返回）。
+  try {
+    window.__TAURI__.event.listen('play-failed', (ev) => {
+      const msg = String(ev.payload ?? '');
+      const name = curPlayName || '频道';
+      document.getElementById('info').textContent = `播放失败：${msg}`;
+      document.getElementById('stage').innerHTML =
+        `<div class="ph"><b>${esc(name)}</b><span>播放失败：${esc(msg)}</span></div>`;
+    });
+  } catch (e) { console.error('play-failed 监听注册失败', e); }
+
+  // ★ 后台「真的出画」回推（Rust 的 wait_video 判据 = mpv 视频子窗口已创建）。
+  //   出画后清掉播放区占位文字、更新底部信息栏。
+  //   （承载窗是独立顶层窗口、盖在 #stage 上，占位文字其实被挡住了，
+  //     但保留它会在窗口缩放/承载窗隐藏时露出来，信息栏文案也要跟上。）
+  try {
+    window.__TAURI__.event.listen('play-started', (ev) => {
+      const name = String(ev.payload ?? '') || curPlayName || '';
+      const stage = document.getElementById('stage');
+      const info = document.getElementById('info');
+      if (stage) {
+        const ph = stage.querySelector('.ph');
+        // 只清占位，不动别的内容
+        if (ph) ph.remove();
+      }
+      if (info) info.textContent = name ? `正在播放：${name}` : '正在播放';
+    });
+  } catch (e) { console.error('play-started 监听注册失败', e); }
+
+  // ★★ 线路耗尽弹窗（本机源 / 官网源各自独立，两源互不通）。
+  //   Rust 侧在「本频道所有线路重试完仍失败 / 无可用线路」时回推
+  //   `local-exhausted` 或 `official-exhausted`，payload = `tid|cid|name|reason`。
+  //   弹两个按钮：① 继续重试本频道（重新走完整取流）② 切当前列表下一个频道。
+  let lastExhaustKey = '';
+  function showExhaustDialog(evName, tid, cid, name, reason) {
+    // 去掉 Rust 侧把 label 里管道符当作分隔的歧义：payload 用前两个 | 切出 tid/cid，
+    //   其余全算 name+reason（Rust 里 label 不含 `|`，故 tid|cid 一定是前两段）。
+    // 防重：同一频道同一秒重复弹窗只保留一个。
+    const key = evName + '|' + tid + '|' + cid;
+    const now = Date.now();
+    if (key === lastExhaustKey) return;   // 连续重复直接吞掉
+    lastExhaustKey = key;
+    // 关掉可能残留的旧弹窗
+    document.querySelectorAll('.exhaust-mask').forEach((n) => n.remove());
+
+    const srcName = evName === 'local-exhausted' ? '本机源' : '官网源';
+    const mask = document.createElement('div');
+    mask.className = 'exhaust-mask';
+    mask.innerHTML = `
+      <div class="exhaust-card">
+        <b>${esc(name)}</b>
+        <p>${srcName}所有线路都已尝试，仍无法播放。</p>
+        <p style="font-size:12px;color:#6b7280;">${esc(reason || '')}</p>
+        <div class="btns">
+          <button class="retry">继续重试</button>
+          <button class="primary next">下一个频道</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+
+    // 继续重试：重新播放当前频道（完整重走取流）。
+    mask.querySelector('.retry').addEventListener('click', () => {
+      mask.remove();
+      lastExhaustKey = '';   // 允许下次再弹
+      play(cid, name);
+    });
+    // 下一个频道：定位当前列表里当前项的下一个 li；到底则回第一个。
+    mask.querySelector('.next').addEventListener('click', () => {
+      mask.remove();
+      lastExhaustKey = '';
+      const list = document.querySelectorAll(
+        `#chans li[data-id][data-tid="${CSS.escape(curTid)}"]`);
+      if (!list.length) return;
+      let cur = -1;
+      list.forEach((li, i) => { if (li.dataset.id === String(cid)) cur = i; });
+      const next = cur >= 0 && cur + 1 < list.length ? list[cur + 1] : list[0];
+      if (next) next.click();
+    });
+  }
+
+  function wireExhaust(evName) {
+    try {
+      window.__TAURI__.event.listen(evName, (ev) => {
+        const raw = String(ev.payload ?? '');
+        const a = raw.split('|');
+        const tid = a[0] || '';
+        const cid = a[1] || '';
+        const name = a[2] || curPlayName || '频道';
+        const reason = a.slice(3).join('|');
+        showExhaustDialog(evName, tid, cid, name, reason);
+      });
+    } catch (e) { console.error(evName + ' 监听注册失败', e); }
+  }
+  wireExhaust('local-exhausted');
+  wireExhaust('official-exhausted');
+
   async function maybeAutoplay() {
+    // ★ 防重入必须在任何 await 之前同步置位：renderChans 可能被两次渲染各调
+    //   一次（loadCats 与验收钩子 loadChans 并发），若在 await invoke 之后才置
+    //   autoplayFired，两次调用都会通过检查 → play_channel 派发两次（实测双份
+    //   headless 取流，旧代次作废、白白浪费一条线路）。
     if (autoplayFired) return;
+    autoplayFired = true;
     try {
       const env = await invoke('env_flag');
       if (env.autoplay) {
-        autoplayFired = true;
-        const first = document.querySelector('#chans li');
-        if (first) {
-          first.click();
-          invoke('self_check', { report: JSON.stringify({ autoplay: 'triggered', chan: first.dataset.name }) });
+        // 可选：CLEAN_TV_AUTOPLAY_SRC=official 强制从官网源起播（验回落链路用）。
+        try {
+          const src = await invoke('env_flag_src');
+          invoke('self_check', { report: JSON.stringify({ autoplay: 'src', src: String(src), v: 3 }) });
+          // 支持 "official@ys" 格式：切官网源并选中指定分类（源站个别分类的
+          // 播放页可能下线，如 tv 综合分类 404，验收时用正常分类）。
+          const [srcName, wantTid] = String(src).split('@');
+          if (srcName === 'official' && curSrc !== 'official') switchSrc('official');
+          if (wantTid) {
+            // 轮询等分类下拉出现目标分类（官网源分类晚到）再选中加载。
+            let foundOpt = false;
+            for (let i = 0; i < 40; i++) {
+              const opt = document.querySelector(`#catsel option[value="${CSS.escape(wantTid)}"]`);
+              if (opt) {
+                foundOpt = true;
+                curTid = wantTid;
+                loadChans();
+                break;
+              }
+              if (i === 5 || i === 15) {
+                invoke('self_check', { report: JSON.stringify({ autoplay: 'wantTid-wait', i, opts: document.getElementById('catsel').innerHTML.slice(0, 200), v: 3 }) });
+              }
+              await new Promise((r) => setTimeout(r, 500));
+            }
+            if (!foundOpt) {
+              invoke('self_check', { report: JSON.stringify({ autoplay: 'wantTid-timeout', wantTid, opts: document.getElementById('catsel').innerHTML.slice(0, 300), v: 3 }) });
+            }
+          }
+        } catch (e) {
+          invoke('self_check', { report: JSON.stringify({ autoplay: 'hook-error', err: String(e), v: 3 }) });
         }
+        // ★ 定点验收钩子：CLEAN_TV_AUTOPLAY_CID=<n> —— 播当前分类里第 n 个频道
+        //   （从 1 开始，按列表顺序）。缺省 = 第 1 个。
+        //   用途：默认 autoplay 只播第 1 个（凤凰卫视中文台），而它恰被网络层
+        //   封锁，测不出其它频道；定点钩子可指定 gt:6 / wintv123:NN 等。
+        let wantCid = 0;
+        try {
+          const raw = String(await invoke('env_autoplay_cid') || '').trim();
+          const n = parseInt(raw, 10);
+          if (Number.isFinite(n) && n > 0) wantCid = n;
+        } catch (e) { /* 老版本无此命令 → 取第 1 个 */ }
+        // ★ 时序：switchSrc/loadChans 是异步的，立即点会点到「加载中…」占位
+        //   （实测 chanCount=1 且无 data-id，点击落空、play_channel 根本不触发）。
+        //   轮询等真实频道条目（带 data-id）出现再点，最长 10 秒。
+        for (let i = 0; i < 60; i++) {
+          // ★ 只认当前分类的条目：切源瞬间旧列表还在 DOM 里（loadCats 异步），
+          //   不校验 data-tid 会点到旧源残留频道（实测点了本机源残留的 CCTV1）。
+          const list = document.querySelectorAll(`#chans li[data-id][data-tid="${CSS.escape(curTid)}"]`);
+          const li = wantCid > 0 ? list[wantCid - 1] : list[0];
+          if (li) {
+            li.click();
+            invoke('self_check', { report: JSON.stringify({ autoplay: 'triggered', v: 3, src: curSrc, tid: curTid, chan: li.dataset.name, wantCid, total: list.length }) });
+            return;
+          }
+          if (i === 20 && wantCid > 0) {
+            invoke('self_check', { report: JSON.stringify({ autoplay: 'cid-wait', v: 3, wantCid, have: list.length }) });
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        invoke('self_check', { report: JSON.stringify({ autoplay: 'timeout-no-chan', v: 3, src: curSrc, tid: curTid, wantCid }) });
       }
     } catch (e) { console.error('autoplay 钩子失败', e); }
   }
 
   async function boot() {
     await invoke('self_check', { report: JSON.stringify({ boot: 'enter' }) });
+    // ★ 上报一次播放区几何（承载窗口初始定位）。
+    await reportStageRect();
     try {
       const info = await invoke('app_info');
-      await invoke('self_check', { report: JSON.stringify({ boot: 'app_info_ok' }) });
       document.getElementById('ver').textContent =
-        `v${info.app_version} · core ${info.core_version} · ${info.profile}`;
+        `v${info.app_version} · ${info.profile}`;
       document.getElementById('info').textContent =
         `数据层版本 ${info.core_version} · 编译目标 ${info.target} · 构建 ${info.profile}`;
     } catch (e) {
       document.getElementById('ver').textContent = `IPC 失败: ${e}`;
     }
-    // 早期探针：确认 boot 入口 + IPC 通（release 无控制台，靠 self_check 落日志）
-    try {
-      await invoke('self_check', { report: JSON.stringify({ boot_start: true }) });
-    } catch (e) { console.error('boot_start 上报失败', e); }
 
-    await invoke('self_check', { report: JSON.stringify({ boot: 'before_loadCats' }) });
+    // 源切换事件
+    document.querySelectorAll('#srcbar .src').forEach((n) =>
+      n.addEventListener('click', () => switchSrc(n.dataset.src)));
+    document.getElementById('catsel').addEventListener('change', (e) => {
+      curTid = e.target.value;
+      loadChans();
+    });
+
     await loadCats();
-    await invoke('self_check', { report: JSON.stringify({ boot: 'after_loadCats' }) });
-    await loadChans();
-    try {
-      await invoke('self_check', { report: JSON.stringify({ loadchans_done: true }) });
-    } catch (e) { console.error('loadchans_done 上报失败', e); }
 
-    // 启动自检：回传渲染状态，区分「真白屏」与「抓图失败」
+    // ★ 验收钩子：CLEAN_TV_AUTOPLAY_TID=ys / w|央视 直接指定启动分类（绕开
+    //   AUTOPLAY_SRC 的 switchSrc 轮询链路——实测该链路 wantTid 轮询静默卡住）。
+    //   初始 loadChans(curTid=旧值) 的飞行结果由过期渲染防护丢弃。
     try {
-      const b = getComputedStyle(document.body);
+      const at = await invoke('env_autoplay_tid');
+      if (at) {
+        curTid = at;
+        curSrc = at.startsWith('w|') ? 'official' : 'local';
+        document.querySelectorAll('#srcbar .src').forEach((n) =>
+          n.classList.toggle('active', n.dataset.src === curSrc));
+        document.getElementById('selLabel').textContent = selLabelText();
+        const sel0 = document.getElementById('catsel');
+        if (sel0.querySelector(`option[value="${CSS.escape(at)}"]`)) sel0.value = at;
+        loadChans();
+        invoke('self_check', { report: JSON.stringify({ autoplay: 'tid-set', tid: at, src: curSrc, v: 3 }) });
+      }
+    } catch (e) { /* 无该钩子则忽略 */ }
+
+    // ★ 分类晚到补拉：两个源的预抓都在后台进行，可能比首屏晚到。
+    //   每 5s 检查一次：用户停在当前源但分类仍为空，就重新拉分类（直到拉到）。
+    setInterval(() => {
+      if (!catsBySrc[curSrc].length) loadCats();
+    }, 5000);
+
+    // ★ 结构自检（延迟 9s，等两个源预抓都完成）：把两源完整分类名上报日志，
+    //   供验收脚本判断「本机源 6 分类 / 官网源 51 分组」是否符合旧版结构。
+    setTimeout(async () => {
+      try {
+        const cats = await invoke('list_categories');
+        const pick = (s) => cats.filter((c) => c.src === s).map((c) => c.name);
+        invoke('self_check', {
+          report: JSON.stringify({ v: 4, local: pick('local'), official: pick('official') }),
+        });
+      } catch (e) { /* ignore */ }
+    }, 9000);
+
+    // 启动自检
+    try {
       const aside = document.querySelector('aside');
       await invoke('self_check', {
         report: JSON.stringify({
           title: document.title,
-          bodyBgImage: b.backgroundImage.slice(0, 60),
-          catCount: document.querySelectorAll('.cat').length,
+          src: curSrc,
+          catCount: document.querySelectorAll('#catsel option').length,
           chanCount: document.querySelectorAll('#chans li').length,
           hasStage: !!document.getElementById('stage'),
           asideBox: aside ? `${aside.clientWidth}x${aside.clientHeight}` : null,
           viewport: `${innerWidth}x${innerHeight}`,
-          dpr: devicePixelRatio,
         }),
       });
-    } catch (e) {
-      console.error('self_check 上报失败', e);
-    }
+    } catch (e) { console.error('self_check 上报失败', e); }
   }
 
   boot();

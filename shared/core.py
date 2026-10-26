@@ -28,6 +28,9 @@ import time
 import base64
 import urllib.request
 import urllib.error
+import urllib.parse
+import queue
+import threading
 
 # ------------------------------------------------------------------ 常量
 APP_UA = ("Mozilla/5.0 (Linux; Android 9; SM-N9700 Build/PQ3B.190801.01311438; wv) "
@@ -386,6 +389,90 @@ def apply_settings(s):
     return {"host": _pref_mirror, "ua": UA, "ttl": CACHE_TTL}
 
 
+def probe_stream(url, timeout=4.0):
+    """
+    真流是否真的在吐数据。
+
+    ★ 只发 `Range: bytes=0-0` 取 1 个字节，**绝不拉整条流**
+      —— FLV 是永不结束的流，读正文必然超时，还白耗源站配额。
+    ★ 判据用**状态码**：2xx/206/416 算活，404/超时/连接失败算死。
+      416（Range Not Satisfiable）说明资源存在、只是不接受这个范围。
+
+    :return: True = 活；False = 死
+    """
+    try:
+        req = urllib.request.Request(
+            url, headers={**headers(), "Range": "bytes=0-0"})
+        with urllib.request.urlopen(req, timeout=timeout, context=_CTX) as r:
+            try:
+                r.read(1)
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+    except urllib.error.HTTPError as e:
+        return e.code in (416, 200, 206)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def resolve_playable(url, timeout=5.0):
+    """
+    把一条 eplay2.php 线路解析成「可播的 CDN 直链」，并顺手探活。
+
+    :return: 真流地址（活）或 None（解析不出/死了）
+    """
+    real = resolve_stream(url, timeout=timeout)
+    if not real or real == url:
+        # 没解析出真流：可能是直接就给流的线路，仍有必要试一次
+        return url if probe_stream(url, timeout=timeout) else None
+    return real if probe_stream(real, timeout=timeout) else None
+
+
+def first_playable(urls, timeout=3.5, limit=10):
+    """
+    并发探测多条线路，返回**第一个**能被确认可播的真流地址（全不通返回 None）。
+
+    ## 为什么必须并发
+    实测同一频道的 13 条线路里，死线可能占大多数（央视系某些频道全死），
+    串行一条条试要 13~18 秒，用户早以为卡死了。
+    并发后：有活线时 1~3 秒就返回；全死时才等到超时（≈timeout）。
+
+    ## 为什么不怕限流
+    实测 13 条并发打 `eplay2.php` 取 302 全部正常返回（限流出现在
+    「同一 token 反复读整条流」时），探测只取 1 字节，代价极小。
+
+    :param urls: eplay2.php 线路列表
+    :param timeout: 单条「解析+探活」超时（秒）
+    :param limit: 最多并发探几条（默认 10，够覆盖绝大多数频道）
+    """
+    if not urls:
+        return None
+    cand = urls[:limit]
+    q = queue.Queue()
+    state = {"url": None}
+    lock = threading.Lock()
+
+    def work(u):
+        if state["url"]:               # 已有赢家，别再白打源站
+            return
+        try:
+            r = resolve_playable(u, timeout=timeout)
+        except Exception:              # noqa: BLE001
+            r = None
+        if r:
+            with lock:
+                if not state["url"]:
+                    state["url"] = r
+            q.put(r)
+
+    for u in cand:
+        threading.Thread(target=work, args=(u,), daemon=True).start()
+    try:
+        return q.get(timeout=timeout + 2.0)
+    except queue.Empty:
+        return None
+
+
 def play_url(tid, cid, p=0):
     """直出播放地址（调试/外链用）。"""
     html = api_get("/iptve.php?act=play&tid=%s&id=%s" % (tid, cid))
@@ -393,6 +480,73 @@ def play_url(tid, cid, p=0):
     if 0 <= p < len(urls):
         return urls[p]
     return urls[0] if urls else None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """不自动跟随重定向 —— 302 的 Location 要自己取。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None
+
+
+def resolve_stream(url, timeout=6.0):
+    """
+    把「源站中转 URL」解析成「最终真实流 URL」。
+
+    ## 为什么必须有这一步
+    本机源的线路形态是::
+
+        https://api1.2026016.xyz/eplay2.php?token=..&tid=ty&id=28&p=2&type=.flv
+
+    它是**中转口**，必须 302 才到 CDN 真流::
+
+        eplay2.php ──302──> https://t47.iptv200.com:8443/live/cctv5.flv?sign=..
+
+    实测（同一时刻、同一线路）：
+      · 只取 302 响应头（不跟随）   → **0.20 ~ 0.62s**
+      · 跟随重定向并读流正文（= 播放器默认行为） → **11.8 ~ 20.9s**
+        （FLV 是永不结束的流，客户端一直在等正文，读操作被挂到超时）
+    播放器的看门狗通常 10~12s，被这段首跳吃光 → **明明活着的线路被判死**。
+    所以先在本地把真流地址解出来，只把 CDN 直链交给播放器。
+
+    ## 多跳
+    302 目标有两类：
+      · 直连真流（`t*.iptv200.com:8443/live/xxx.flv?sign=..`）→ 直接用
+      · 二级中转（`/v/migu8.php`、`/v/ysp6.php` …，路径以 `.php` 结尾）→ 继续跟
+    最多跟 4 跳。
+
+    :param url: eplay2.php 中转地址
+    :param timeout: 单跳超时（秒）
+    :return: 真流地址；解析失败时**原样返回入参**（让播放器自己跟，总比不给好）
+    """
+    opener = urllib.request.build_opener(_NoRedirect)
+    cur = url
+    for _ in range(4):
+        try:
+            req = urllib.request.Request(cur, headers=headers())
+            resp = opener.open(req, timeout=timeout)
+            # 没跳转、直接 200 → 本身就是流
+            try:
+                resp.read(1)
+            except Exception:  # noqa: BLE001
+                pass
+            return cur
+        except urllib.error.HTTPError as e:
+            loc = e.headers.get("Location") if e.headers else None
+            if not loc:
+                return url
+            nxt = urllib.parse.urljoin(cur, loc)
+            # 还是中转口（路径以 .php 结尾）→ 继续跟
+            try:
+                if urllib.parse.urlparse(nxt).path.lower().endswith(".php"):
+                    cur = nxt
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
+            return nxt
+        except Exception:  # noqa: BLE001
+            return url
+    return url
 
 
 if __name__ == "__main__":

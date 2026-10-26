@@ -2338,7 +2338,40 @@ class NativeApp:
             return
         self._set_loading_sub("正在连接线路 %d/%d" % (idx + 1, n))
         self.status_lbl.configure(text="连接中…")
-        self._start_mpv(url)
+        # ★★ 本机源的线路是 `eplay2.php?token=..` 这种**中转口**，必须先在本地
+        #   把 302 跳到 CDN 真流，再把直链交给 mpv。
+        #   让 mpv 自己跟 302 时：FLV 是永不结束的流，客户端会一直等正文 →
+        #   首跳实测 11.8~20.9s，直接吃光 12s 看门狗 → 表现就是「点了没反应 /
+        #   线路全挂」。本地只取 302 响应头，0.2~0.6s 就能拿到真流。
+        threading.Thread(target=self._resolve_and_play, args=(idx, url), daemon=True).start()
+
+    def _resolve_and_play(self, idx, url):
+        """
+        后台解析 302 真流 + 并发探活跳死线，再播放。
+
+        ★★ 两个必须同时做的修复（源站升级后踩出来的）：
+          ① **必须先解 302**：线路是 `eplay2.php` 中转口，播放器自己跟 302 时
+             FLV 长连接会把首跳拖到 11.8~20.9s，吃光看门狗 → 「点了没反应」。
+          ② **必须跳过死线**：实测同一频道首条线路经常是死的
+             （ys:1 / tv:1 的 p=0 连上 CDN 但一个字节都不吐），只播第一条必然失败。
+        ★ 并发探测：正常 1~3s 返回；全死才等到超时（≈5.5s），不会像串行那样 18s。
+        """
+        gen = self._mpv_gen            # 记下当前代次：换台后丢弃过期结果
+        n = len(self.cur.get("urls") or [])
+        real = None
+        try:
+            real = _core.first_playable(self.cur["urls"], timeout=3.5, limit=10)
+        except Exception as e:         # noqa: BLE001
+            self._log("并发探测异常: %s" % e)
+        if gen != self._mpv_gen:
+            return                     # 期间已换台/停止
+        if not real:
+            self._log("线路 %d/%d 起全部不通（源站无流）" % (idx + 1, n))
+            self._ui(lambda: self.status_lbl.configure(
+                text="该频道线路暂不可用，可点「线路」换一条试试"))
+            return
+        self._log("线路 → 真流: %s" % real[:90])
+        self._ui(lambda: self._start_mpv(real))
 
     # ---------------- 官网源播放（直连走 mpv / 网页走内嵌浏览器） ----------------
     def _play_wvt(self, url, idx):
@@ -3908,7 +3941,22 @@ class NativeApp:
         except Exception:
             pass
 
+    def _autoplay_first(self):
+        """自动化验收钩子：自动打开一个频道（CLEAN_TV_AUTOPLAY*）。"""
+        try:
+            tid = os.environ.get("CLEAN_TV_AUTOPLAY_TID") or "ty"
+            cid = os.environ.get("CLEAN_TV_AUTOPLAY_CID") or "1"
+            self._open_channel(tid, cid, "autoplay")
+            self._log("autoplay 触发 tid=%r cid=%r src=%r" % (tid, cid, self.cur.get("src")))
+        except Exception as e:      # noqa: BLE001
+            self._log("autoplay 失败: %s" % e)
+
     def run(self):
+        # ★ 自动化验收钩子（只影响测试，正常使用不会触发）：
+        #   CLEAN_TV_AUTOPLAY=1 启动后自动播一个频道，便于脚本验证「取流→解析302→mpv 出画」
+        #   整条链路，不用人工点。可选 CLEAN_TV_AUTOPLAY_TID / _CID 指定频道。
+        if os.environ.get("CLEAN_TV_AUTOPLAY"):
+            self.root.after(1500, self._autoplay_first)
         try:
             self.root.mainloop()
         finally:

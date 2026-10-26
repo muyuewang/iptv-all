@@ -38,7 +38,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "macros"] 
 #   tv_rs/tests/           <- 与 Python 的对拍测试
 #   tv_rs/app/             <- Tauri 壳（GUI）
 [workspace]
-members = ["app"]
+members = ["app", "probes"]
 # app 里的依赖（tauri 全家桶）解析结果与 core 无关，
 # 但共享 target 能省一份增量编译缓存。
 resolver = "2"

@@ -110,6 +110,20 @@ pub const MEDIA_EXT: [&str; 6] = [".m3u8", ".flv", ".ts", ".mp4", ".mkv", ".mpd"
 /// - 去掉 query 后以媒体扩展名结尾
 /// - 或 URL 里含 `.m3u8`（形如转发口 `?url=...m3u8`）
 /// - 或含 `type=.flv`（官方源 HTTP-FLV 转发口，mpv 可直接硬解）
+///
+/// ★★ 2026-10-26 补充：本机源（app 版后端 `api*.2026016.xyz`）除 `eplay2.php`
+///   转发口外，还有**中转口**形态
+///   `https://api1.2026016.xyz/v/{cqyx,ysp6,migu8,bstv,bstv1,hunantv,bfiptv}.php
+///    ?token=<T>&id=<台标缩写>[&xra=<档位>]`
+///   —— 它 **302 跳到真流**（`t*.iptv200.com:8443/live/*.flv` 或
+///   `dbiptv.sn.chinamobile.com/PLTV/.../index.m3u8`），mpv 跟随 302 即可播，
+///   **不需要嗅探**。实测（2026-10-26）本机源当前解密出的线路**全部**是
+///   `eplay2.php` 形态（`/v/` 是它 302 的**跳转目标**，不是解密产物），
+///   但源站随时可能改版，故一并纳入判定，避免整批线路被误判成「网页线路」。
+///
+/// ⚠ 判据只认 **path 里含 `/v/` 且以 `.php` 结尾** —— 不能用 `contains(".php")`
+///   （会把 `iptve.php?act=play` 播放页、`p.iptv200.com/play.php` 这类
+///   HTML/已下线接口误判成可播）。
 pub fn is_direct_stream(url: &str) -> bool {
     if url.is_empty() {
         return false;
@@ -119,7 +133,11 @@ pub fn is_direct_stream(url: &str) -> bool {
     if MEDIA_EXT.iter().any(|ext| base.ends_with(ext)) {
         return true;
     }
-    if lower.contains(".m3u8") {
+    // ★ 真 m3u8 直链：URL 本体（去掉 query）以 `.m3u8` 结尾。
+    //   注意这里要排除「中转网页」——如 `http://m3u8.cec-tv.com.cn/?url=...m3u8`
+    //   它的 path 是 `/`，query 里才含 `.m3u8`，实际返回 HTML 播放页、mpv 无法
+    //   直接播（"Failed to recognize file format"）。所以不能用 `lower.contains(".m3u8")`。
+    if base.ends_with(".m3u8") || base.ends_with(".m3u8/") {
         return true;
     }
     // ★ 官方源 eplay2.php 转发口：`.../eplay2.php?token=...&p=0&type=.flv`
@@ -127,7 +145,35 @@ pub fn is_direct_stream(url: &str) -> bool {
     if lower.contains("eplay2.php") && lower.contains("type=.flv") {
         return true;
     }
+    // ★ 本机源中转口：`.../v/<name>.php?token=..&id=..` → 302 到真流。
+    if is_relay_stream(&base) {
+        return true;
+    }
     false
+}
+
+/// 本机源中转口判定：`path` 里含 `/v/` 段且以 `.php` 结尾。
+///
+/// 与 [`is_direct_stream`] 分开是因为「官网源网页线路」也要走同一判定，
+/// 而官网源的中转口没有 `/v/` 段（那是本机源后端独有的形态）。
+pub fn is_relay_stream(base_path: &str) -> bool {
+    if !base_path.ends_with(".php") {
+        return false;
+    }
+    // path 形如 `/v/cqyx.php` → 段级判断，避免 `/somev/cqyx.php` 误判
+    base_path
+        .split('/')
+        .any(|seg| seg.eq_ignore_ascii_case("v"))
+}
+
+/// 是否「URL 本体以 .m3u8 结尾」的真 m3u8 直链（区别于中转网页把 .m3u8 藏在 query）。
+/// 供本机源选线时优先挑选真正可直接播的流。
+pub fn is_m3u8_direct(url: &str) -> bool {
+    if url.is_empty() {
+        return false;
+    }
+    let base = url.split('?').next().unwrap_or("").to_lowercase();
+    base.ends_with(".m3u8") || base.ends_with(".m3u8/")
 }
 
 /// 一条线路（展平后的条目）
@@ -271,8 +317,9 @@ mod tests {
         assert!(is_direct_stream("http://a.com/live.m3u8"));
         assert!(is_direct_stream("http://a.com/x.flv?a=1")); // query 被剥掉后仍是 .flv
         assert!(is_direct_stream("http://a.com/x.M3U8")); // 大小写不敏感
-        // 转发口：query 里带 .m3u8
-        assert!(is_direct_stream("http://a.com/play?url=http://b.com/live.m3u8"));
+        // ★ 转发口（query 里带 .m3u8）**不算**直连：实测 `http://m3u8.cec-tv.com.cn/?url=...`
+        //   返回的是 HTML 播放页，mpv 报 "Failed to recognize file format"。
+        assert!(!is_direct_stream("http://a.com/play?url=http://b.com/live.m3u8"));
         // 域名里含 m3u8 但路径无媒体后缀 —— 必须判否，否则会把网页线路误判成直连
         assert!(!is_direct_stream("http://m3u8.cec-tv.com.cn/?url=abc"));
         assert!(!is_direct_stream("http://tv.cctv.com/live/cctv1/"));
@@ -291,11 +338,36 @@ mod tests {
             ("http://a.com/x.M3U8", true),
             ("http://tv.cctv.com/live/cctv1/", false),
             ("", false),
-            ("http://a.com/play?url=http://b.com/live.m3u8", true),
+            // 转发口返回 HTML，判否（与 is_m3u8_direct 的语义一致）
+            ("http://a.com/play?url=http://b.com/live.m3u8", false),
         ];
         for (url, want) in cases {
             assert_eq!(is_direct_stream(url), *want, "url={url}");
         }
+    }
+
+    /// 本机源中转口（`/v/*.php`）判为直连 —— mpv 跟随 302 即得真流。
+    #[test]
+    fn relay_stream_detection() {
+        // ★ 本机源真实中转口（2026-10-26 实测形态）
+        assert!(is_direct_stream(
+            "https://api1.2026016.xyz/v/cqyx.php?token=ABC&id=gzws"
+        ));
+        assert!(is_direct_stream(
+            "https://api1.2026016.xyz/v/ysp6.php?token=ABC&xra=4&id=fyzq"
+        ));
+        // 段级判断：`/somev/` 不是 `/v/`
+        assert!(!is_direct_stream("https://x.com/somev/cqyx.php?token=A"));
+        // ★ 不能把「播放页」和「已下线的 678 出口」误判成可播
+        assert!(!is_direct_stream("https://api1.2026016.xyz/iptve.php?act=play&tid=gt&id=5"));
+        assert!(!is_direct_stream(
+            "https://p.iptv200.com/play.php?token=ABC&tid=gt&id=5&p=0&type=.flv"
+        ));
+        // is_relay_stream 直接判定
+        assert!(is_relay_stream("/v/cqyx.php"));
+        assert!(is_relay_stream("/v/bstv1.php"));
+        assert!(!is_relay_stream("/iptve.php"));
+        assert!(!is_relay_stream("/eplay2.php"));
     }
 
     #[test]

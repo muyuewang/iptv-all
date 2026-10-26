@@ -1,0 +1,84 @@
+[package]
+name = "clean-tv-probes"
+version = "0.1.0"
+edition = "2021"
+description = "纯净电视 · 探针/诊断工具集（不进交付包）"
+license = "MIT"
+publish = false
+
+# ★ 为什么单独一个 crate：
+#   Tauri 2 的 bundler 会把 package 里**所有** bin target 都打进安装包
+#   （实测：报 "when getting size of .../probe_embed.exe: 系统找不到指定的文件"）。
+#   这些探针是开发期诊断工具（嗅探验证、协议探测），不该出现在用户安装包里。
+#   拆成独立 crate 后，app package 只剩 clean-tv-app 一个 bin，打包干净。
+[[bin]]
+name = "probe_embed"
+path = "src/probe_embed.rs"
+
+[[bin]]
+name = "probe_789"
+path = "src/probe_789.rs"
+
+[[bin]]
+name = "probe_official"
+path = "src/probe_official.rs"
+
+[[bin]]
+name = "probe_official_web"
+path = "src/probe_official_web.rs"
+
+[[bin]]
+name = "probe_token"
+path = "src/probe_token.rs"
+
+[[bin]]
+name = "probe_wvt5"
+path = "src/probe_wvt5.rs"
+
+[[bin]]
+name = "probe_wvt5cfg"
+path = "src/probe_wvt5cfg.rs"
+
+[[bin]]
+name = "probe_wvt_alive"
+path = "src/probe_wvt_alive.rs"
+
+[[bin]]
+name = "probe_wvt_detail"
+path = "src/probe_wvt_detail.rs"
+
+[[bin]]
+name = "probe_wvt_refresh"
+path = "src/probe_wvt_refresh.rs"
+
+[[bin]]
+name = "spike_net"
+path = "src/spike_net.rs"
+
+[dependencies]
+clean-tv-core = { path = ".." }
+serde_json = { workspace = true }
+tauri = { version = "2", features = ["custom-protocol"] }
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "rustls-tls", "charset", "blocking"] }
+ureq = "3.5.0"
+
+[[bin]]
+name = "probe_local_404"
+path = "src/probe_local_404.rs"
+
+[[bin]]
+name = "probe_local_full"
+path = "src/probe_local_full.rs"
+
+[[bin]]
+name = "probe_loc"
+path = "src/probe_loc.rs"
+
+[[bin]]
+name = "probe_live"
+path = "src/probe_live.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

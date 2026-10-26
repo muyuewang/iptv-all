@@ -71,6 +71,11 @@ pub fn client() -> reqwest::Client {
         .use_native_tls()
         .danger_accept_invalid_certs(true)
         .default_headers(headers())
+        // ★ no_proxy()：**禁用环境变量代理**。reqwest 默认会读 http_proxy/https_proxy，
+        //   一旦环境里有代理（本机沙箱就是 127.0.0.1:12244），线路探测会全部走代理
+        //   → 探速只命中 1 条、mpv 拿到的是代理错误页 → 表现为「12s 未出画面」。
+        //   直播流必须直连源站，不走任何中间代理。
+        .no_proxy()
         .build()
         .expect("构建 HTTP 客户端失败")
 }
@@ -252,9 +257,106 @@ pub fn blocking_client() -> reqwest::blocking::Client {
         .use_native_tls()
         .danger_accept_invalid_certs(true)
         .default_headers(headers())
+        // ★ 同上：禁用环境变量代理，直播线路直连源站。
+        .no_proxy()
         .build()
         .expect("构建同步 HTTP 客户端失败")
 }
+
+/// 不跟随重定向的同步客户端（探活用）。
+///
+/// 用途：直播线路探活时**只跟到 302 就停**。跟到底会真的读 1KB FLV 正文，
+/// 等于替 mpv 提前消耗一次源站的流配额 —— 实测探速「用掉」最好的线路后，
+/// mpv 再播同一条要等 9 秒才出画。只看 302 存在与否就能判断节点是否活着。
+pub fn blocking_client_no_redirect() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .use_native_tls()
+        .danger_accept_invalid_certs(true)
+        .default_headers(headers())
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("构建不跟随重定向的同步 HTTP 客户端失败")
+}
+
+/// ★★ 把「源站中转 URL」解析成「最终真实流 URL」（2026-10-26 新增）。
+///
+/// ★ 为什么需要：app 版本机源的线路形态是
+///   `https://api1.2026016.xyz/eplay2.php?token=..&tid=ty&id=28&p=2&type=.flv`
+///   —— **必须先 302 跳到 CDN 才是真流**：
+///   ```
+///   eplay2.php ──302──> https://t41.iptv200.com:8443/live/eltasport1.flv?sign=..
+///   ```
+///   实测（同一时刻、同一线路）：
+///     · **只取 302 响应头（不跟随）→ 0.20 ~ 0.25 秒**
+///     · CDN 直连 `t41.iptv200.com:8443` → **0.6 秒**
+///     · 而 mpv 自己跟 302 并读流 → 首跳拖到 **11.8 ~ 20.9 秒**
+///       （源站 TLS 握手常超时，实测 6 次里 4 次超时）
+///   mpv 的出画窗口是 12s，被源站首跳吃光 → **明明活着的线路被判死**
+///   （实测 gt:50 愛爾達體育1台：mpv 日志 11.1s 才连上源站，看门狗已耗尽）。
+///
+/// ★★ 为什么必须**递归**（多跳）：源站的 302 目标**有两类**，实测（ys:1，13 条线路）：
+///   ```
+///   p=0 → https://t40.iptv200.com:8443/live/cctv1.flv?sign=1792964300-1a2f…   ← 直连真流
+///   p=4 → https://api1.2026016.xyz/v/migu8.php?token=PFZuM7UB%2F…&id=cctv1   ← 二级中转
+///   p=5 → https://api1.2026016.xyz/v/cctv.php?token=OQJrN7cK%2B…&id=cctv1    ← 二级中转
+///   ```
+///   `/v/*.php` 还要再 302 一次才是真流（实测 `/v/migu8.php` 单独请求返 **HTTP 500**，
+///   必须带 Location 里给的 token&id 参数才行）。
+///   所以：跟到 Location，若**仍是中转口**（路径以 `.php` 结尾）就带着它的参数继续跟，
+///   直到拿到真正的媒体地址（最多 4 跳）。
+///
+/// ★ 只取响应头、**不跟随、不读正文**：跟随重定向后 reqwest 会去读 FLV 正文，
+///   而 FLV 是**永不结束的流** → 读操作被挂住直到超时（实测 11.8~20.9s）。
+///
+/// 返回 `Ok(真流URL)` = 解析成功；`Err` = 不可解析（调用方应回退到原 URL）。
+pub fn resolve_stream_url(url: &str, timeout_ms: u64) -> Result<String, String> {
+    let cli = blocking_client_no_redirect();
+    let mut cur = url.to_string();
+    // ★ 最多 4 跳：eplay2 →(/v/*.php) →(媒体地址)。超过就认为解析失败。
+    for _ in 0..4 {
+        let resp = cli
+            .get(&cur)
+            .timeout(std::time::Duration::from_millis(timeout_ms))
+            .send()
+            .map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if status.is_redirection() {
+            let loc = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| format!("HTTP {} 但无 Location 头", status.as_u16()))?;
+            // 相对 Location 补全成绝对 URL。
+            let next = if loc.starts_with("http://") || loc.starts_with("https://") {
+                loc.to_string()
+            } else if let Ok(base) = reqwest::Url::parse(&cur) {
+                base.join(loc)
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|_| loc.to_string())
+            } else {
+                loc.to_string()
+            };
+            // ★ 还 是中转口（.php）→ 继续跟；否则就是真流地址了。
+            let path = reqwest::Url::parse(&next)
+                .map(|u| u.path().to_ascii_lowercase())
+                .unwrap_or_default();
+            if path.ends_with(".php") {
+                cur = next;
+                continue;
+            }
+            return Ok(next);
+        }
+        if status.is_success() {
+            // 直接就是流（没有中转）→ 原样返回，让 mpv 自己处理。
+            return Ok(cur);
+        }
+        return Err(format!("HTTP {}", status.as_u16()));
+    }
+    Err("重定向跳数过多（>4）".to_string())
+}
+
 
 /// 同步 GET，返回 UTF-8 文本。
 fn blocking_http_get(url: &str, timeout_secs: u64, cli: &reqwest::blocking::Client) -> Result<String, String> {
@@ -442,6 +544,47 @@ pub fn wvt_direct_lines(channels: &[WvtChannel]) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+// ==================================================================
+// 789iptv 频道表抓取层（替代过时的 WebViewTvLive data/4 本机源）
+// ==================================================================
+//
+// 789iptv.com（原 678iptv.com）是 jquery mobile 电视直播站，分类页 URL 形如
+// `https://789iptv.com/?act=<tid>`，频道条目结构 `?act=play&tid=x&id=y`，与
+// 官方源完全相同，可直接复用 `parse_channels`（见 core.rs）。789 分类页返回的是
+// 明文 HTML（无加密），抓取稳定、无签名时效问题，适合启动预抓进缓存。
+//
+// 5 分类：tv(综合) / ty(体育) / ys(央视) / ws(卫视) / gt(港澳台)。
+
+/// 789iptv 分类（tid -> 显示名）。与官方源 CATS 前 5 项对齐。
+pub const CATS_789: [(&str, &str); 5] = [
+    ("tv", "综合"),
+    ("ty", "体育"),
+    ("ys", "央视"),
+    ("ws", "卫视"),
+    ("gt", "港澳台"),
+];
+
+/// 789iptv 首页域名。
+pub const HOME_789: &str = "https://789iptv.com";
+
+/// 同步抓取 789iptv 某分类的频道列表（明文 HTML，直接 parse_channels）。
+///
+/// 用 blocking 客户端，独立于官方源的 `ApiState`（789 无需镜像回退/同源解密）。
+pub fn blocking_fetch_789_channels(
+    tid: &str,
+    cli: &reqwest::blocking::Client,
+) -> Result<Vec<Channel>, String> {
+    // ★ 789 的分类页 URL 是 `?tid=<tid>`（无 act= 前缀），与播放页 `?act=play&...` 不同。
+    //   实测 `?act=<tid>` 只有 tv 能解析（首页默认），ty/ys/ws/gt 全 0 频道。
+    let url = format!("{HOME_789}/?tid={tid}");
+    let html = blocking_http_get(&url, 15, cli)?;
+    let chans = parse_channels(&html, tid);
+    if chans.is_empty() {
+        return Err(format!("分类 {tid} 解析出 0 频道（页面结构可能变化）"));
+    }
+    Ok(chans)
 }
 
 #[cfg(test)]

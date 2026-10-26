@@ -29,7 +29,11 @@ webview2-com = "0.39"
 # 裸 COM 直调要用到的 windows 基础类型（PCWSTR / HSTRING / PWSTR 等）。
 # ★ 必须与 webview2-com-sys 0.39.1 的 windows 依赖版本一致（0.62），
 #   否则 cargo 会同时编译两套不兼容的 windows crate，COM 指针类型对不上。
-windows = { version = "0.62", features = ["Win32_Foundation"] }
+# ★ Win32_UI_WindowsAndMessaging：起播判据要用 EnumChildWindows/GetClassNameW
+#   检测 mpv 是否已经创建了视频子窗口（= 真的解出了第一帧画面）。
+# ★ Win32_Graphics_Gdi：ClientToScreen（把客户区原点换算成屏幕坐标）在这个模块下，
+#   0.62 里它不在 UI::WindowsAndMessaging。
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi"] }
 ureq = "3.5.0"
 
 [build-dependencies]
@@ -41,11 +45,9 @@ tauri-build = { version = "2", features = [] }
 name = "clean-tv-app"
 path = "src/main.rs"
 
-# spike 专用：网络旁听命门验证（裸 COM 直调 WebResourceRequested）
-# 验证完可删除 src/bin/spike_net.rs 并移除本节。
-[[bin]]
-name = "spike_net"
-path = "src/bin/spike_net.rs"
-
+# ★★ 本 package **只允许这一个 bin**：Tauri 2 的 bundler 会把 package 里
+#   所有 bin target 都打进安装包，开发期探针（probe_*/spike_net）会污染
+#   交付包，还会在打包时报「找不到 xxx.exe」。它们已迁到 ../probes 独立 crate。
+#
 # 注意：[profile.*] 在 workspace 成员里会被 cargo 忽略（只有根 Cargo.toml 的
 # profile 生效），所以优化配置统一写在 ../Cargo.toml 的 [profile.dev.package."*"]。
