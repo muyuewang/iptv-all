@@ -37,6 +37,9 @@ tv_rs/app/gen/
 tv_rs/_*.log
 tv_rs/_*.txt
 tv_rs/_*.png
+# 运行时抓包/配置数据（wvt 适配器、频道表、探针对照输出，随上游刷新无需入库）
+tv_rs/wvt_*.json
+tv_rs/app_wvt_*.txt
 # 开发期一次性探针脚本（沿用仓库既有约定：tools/_* 本地保留不入库）
 # 注意：根部的 `tools/_*` 含斜杠会被锚定到仓库根，管不到 tv_rs/tools/，须单列。
 tv_rs/tools/_*

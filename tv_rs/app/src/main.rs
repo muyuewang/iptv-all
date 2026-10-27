@@ -1866,6 +1866,26 @@ fn toggle_fullscreen(app: tauri::AppHandle) -> bool {
     !now
 }
 
+/// 沉浸式窗口 · 最小化（前端顶栏「—」按钮调用）。
+#[tauri::command]
+fn minimize_window(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.minimize();
+    }
+}
+
+/// 沉浸式窗口 · 关闭（前端顶栏「×」按钮调用）。
+///
+/// ★ 先走会话层统一回收（停 mpv + 关官网直播窗），再退出进程 —— 避免
+///   mpv 变成孤儿进程继续出声。关闭即退出（绑定 on_window_event
+///   CloseRequested 里也没拦，直接放行）。
+#[tauri::command]
+fn close_window(app: tauri::AppHandle) {
+    session::SessionManager::global().clear();
+    app.exit(0);
+}
+
 /// 停止播放。
 #[tauri::command]
 fn stop_channel(state: State<'_, AppState>) {
@@ -2071,6 +2091,10 @@ fn main() {
                 .inner_size(1100.0, 700.0)
                 .min_inner_size(720.0, 480.0)
                 .center()
+                // ★ 沉浸式：关掉系统标题栏，让 WebView 的玻璃顶栏顶到窗口最顶端。
+                //   窗口拖动走前端顶栏的 data-tauri-drag-region，最小化/关闭走
+                //   minimize_window / close_window 命令（见 invoke_handler）。
+                .decorations(false)
                 // 命门②：拦死所有 window.open（广告 / 官方播放页弹窗）。
                 .on_new_window(|url, _features| {
                     eprintln!("[win] 拦截新窗口请求: {url}");
@@ -2226,6 +2250,8 @@ fn main() {
             now_playing,
             switch_line,
             toggle_fullscreen,
+            minimize_window,
+            close_window,
             set_pause,
             set_volume,
             set_fit,

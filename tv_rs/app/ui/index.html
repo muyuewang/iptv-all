@@ -5,23 +5,42 @@
 <title>纯净电视直播</title>
 <style>
   :root {
-    --bg-top: #181a24;
-    --bg-mid: #12141c;
-    --bg-bot: #0c0d13;
-    --line: #2a2f3d;
-    --fg: #e8ecf5;
-    --fg-dim: #8f97a8;
-    --hi: #ff4d6d;
+    /* ── 液态玻璃 · 浅色（参考 Bilibili NEXT macOS 客户端） ──
+       macOS 液态玻璃三要素：半透明白底 + 大面积 backdrop-filter 磨砂 +
+       1px 亮色描边（上亮下暗）+ 顶部柔和高光 + 圆角卡片 + 柔和弥散阴影。 */
+    --bg-top: #f4f6fb;
+    --bg-mid: #eef1f8;
+    --bg-bot: #e7ebf4;
+    --line: rgba(255,255,255,.55);          /* 亮色描边主色（玻璃高光边） */
+    --line-soft: rgba(120,132,168,.16);      /* 柔和分隔线（浅灰蓝） */
+    --line-strong: rgba(120,132,168,.28);    /* 稍强的分隔线 */
+    --fg: #1d2333;                            /* 主文字：近黑蓝 */
+    --fg-dim: #5c6478;                        /* 次级文字 */
+    --hi: #ff4d6d;                            /* 品牌主色（保留既有红橙渐变） */
     --lo: #ff6b35;
-    --panel: rgba(255,255,255,.03);
+    /* 玻璃面板：半透明白 + 磨砂 + 高光描边 */
+    --glass: rgba(255,255,255,.58);
+    --glass-strong: rgba(255,255,255,.72);
+    --glass-soft: rgba(255,255,255,.40);
+    --glass-shadow: 0 8px 28px rgba(60,74,124,.10), 0 2px 8px rgba(60,74,124,.08);
+    /* 亮色描边用双层：外发光高光 + 内描边 */
+    --glass-border: inset 0 1px 0 rgba(255,255,255,.85), inset 0 0 0 1px rgba(255,255,255,.35),
+                     inset 0 -1px 0 rgba(120,132,168,.12);
   }
   * { box-sizing: border-box; }
   html, body {
     margin: 0; height: 100%;
-    background: linear-gradient(180deg, var(--bg-top), var(--bg-mid) 45%, var(--bg-bot));
+    /* 浅色液态玻璃背景：柔和渐变 + 两团弥散彩色光斑，营造「玻璃后方有光」的景深感 */
+    background:
+      radial-gradient(1200px 600px at 12% -8%, rgba(255,138,101,.20), transparent 60%),
+      radial-gradient(1000px 700px at 88% 108%, rgba(122,140,255,.18), transparent 60%),
+      radial-gradient(700px 500px at 78% -6%, rgba(255,196,61,.12), transparent 55%),
+      linear-gradient(180deg, var(--bg-top), var(--bg-mid) 45%, var(--bg-bot));
+    background-attachment: fixed;
     color: var(--fg);
     font: 14px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
   }
   body { display: flex; flex-direction: column; }
 
@@ -29,35 +48,65 @@
   header {
     display: flex; align-items: center; gap: 14px;
     padding: 0 18px; height: 58px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--line-soft);
+    /* 顶栏玻璃：半透明白磨砂，让背景光斑晕进来 */
+    background: var(--glass);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
     flex: 0 0 58px;
   }
   .brand-dot {
     width: 10px; height: 10px; border-radius: 50%;
     background: linear-gradient(135deg, var(--hi), var(--lo));
+    box-shadow: 0 0 0 3px rgba(255,77,109,.14), 0 2px 6px rgba(255,77,109,.35);
     flex: 0 0 auto;
   }
   h1 {
-    margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .3px;
+    margin: 0; font-size: 17px; font-weight: 650; letter-spacing: .3px;
     background: linear-gradient(90deg, var(--hi), var(--lo));
     -webkit-background-clip: text; background-clip: text; color: transparent;
     white-space: nowrap;
   }
-  /* 数据源切换：官网源 / 本机源（PillBar，自绘选中标记） */
+  /* 数据源切换：官网源 / 本机源（PillBar，玻璃胶囊） */
   .srcbar {
     display: flex; gap: 4px; margin-left: 20px;
-    background: var(--panel); border-radius: 10px; padding: 4px;
+    background: var(--glass-soft); border-radius: 11px; padding: 4px;
+    backdrop-filter: blur(16px) saturate(150%);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    box-shadow: var(--glass-border);
   }
   .src {
     padding: 4px 18px; border-radius: 8px; cursor: pointer;
     font-size: 13px; color: var(--fg-dim); white-space: nowrap; user-select: none;
+    transition: background .18s, color .18s, box-shadow .18s;
   }
+  .src:hover { color: var(--fg); background: rgba(255,255,255,.5); }
   .src.active {
     color: #fff;
     background: linear-gradient(135deg, var(--hi), var(--lo));
+    box-shadow: 0 3px 10px rgba(255,77,109,.35), inset 0 1px 0 rgba(255,255,255,.35);
   }
   .spacer { flex: 1 1 auto; }
   .ver { color: var(--fg-dim); font-size: 12px; }
+  /* 沉浸式窗口控制按钮（关系统标题栏后接管 最小化/关闭） */
+  .winbtns {
+    display: flex; gap: 6px; flex: 0 0 auto; margin-left: 10px;
+    /* 按钮不属于拖拽区：点按钮不能被当成拖窗口 */
+    -webkit-app-region: no-drag; app-region: no-drag;
+  }
+  .wbtn {
+    width: 28px; height: 26px; border-radius: 8px;
+    border: 1px solid var(--line-soft); background: var(--glass-strong);
+    color: var(--fg-dim); font-size: 13px; line-height: 1; cursor: pointer;
+    display: grid; place-items: center;
+    box-shadow: var(--glass-border);
+    transition: color .15s, background .15s, box-shadow .15s;
+  }
+  .wbtn:hover { color: var(--fg); background: rgba(255,255,255,.85); }
+  .wbtn.wclose:hover {
+    color: #fff; background: #e5484d; border-color: #e5484d;
+    box-shadow: 0 2px 8px rgba(229,72,77,.4);
+  }
 
   /* ── 主体：左列表(344px) + 右播放区 ── */
   main { flex: 1 1 auto; display: flex; min-height: 0; }
@@ -65,29 +114,40 @@
   aside {
     width: 344px; flex: 0 0 344px;
     display: flex; flex-direction: column;
-    border-right: 1px solid var(--line);
-    min-height: 0; background: rgba(0,0,0,.08);
+    border-right: 1px solid var(--line-soft);
+    min-height: 0;
+    /* 玻璃侧边栏：半透明白磨砂，与顶栏同一材质 */
+    background: var(--glass);
+    backdrop-filter: blur(26px) saturate(160%);
+    -webkit-backdrop-filter: blur(26px) saturate(160%);
   }
   /* 分类/分组选择器（下拉） */
-  .selbar { padding: 12px 12px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .selbar { padding: 12px 14px; border-bottom: 1px solid var(--line-soft); flex: 0 0 auto; }
   .selrow { display: flex; align-items: center; gap: 8px; }
   .sellabel { color: var(--fg-dim); font-size: 13px; flex: 0 0 auto; }
   .selbar select {
-    flex: 1 1 auto; min-width: 0; padding: 8px 10px; border-radius: 8px;
-    background: var(--panel); color: var(--fg);
-    border: 1px solid var(--line); font-size: 13px; outline: none;
+    flex: 1 1 auto; min-width: 0; padding: 8px 10px; border-radius: 9px;
+    background: var(--glass-strong); color: var(--fg);
+    border: 1px solid var(--line-soft); font-size: 13px; outline: none;
+    box-shadow: var(--glass-border);
+    transition: border-color .15s, box-shadow .15s;
   }
-  .selbar select option { background: #181a24; color: var(--fg); }
-  #chans { flex: 1 1 auto; overflow-y: auto; margin: 0; padding: 8px; list-style: none; }
+  .selbar select:hover { border-color: var(--line-strong); }
+  .selbar select:focus { border-color: var(--hi); box-shadow: 0 0 0 3px rgba(255,77,109,.14); }
+  .selbar select option { background: #ffffff; color: var(--fg); }
+  #chans { flex: 1 1 auto; overflow-y: auto; margin: 0; padding: 10px 10px 12px; list-style: none; }
   #chans li {
     display: flex; align-items: center; gap: 9px;
-    padding: 6px 9px; border-radius: 7px; margin-bottom: 2px; cursor: pointer;
+    padding: 7px 9px; border-radius: 10px; margin-bottom: 3px; cursor: pointer;
     background: transparent; border: 1px solid transparent;
+    transition: background .15s, box-shadow .15s;
   }
-  #chans li:hover { background: var(--panel); }
+  #chans li:hover { background: rgba(255,255,255,.55); }
   #chans li.on {
-    border-color: var(--line);
-    background: linear-gradient(90deg, rgba(255,77,109,.12), rgba(255,107,53,.06));
+    border-color: rgba(255,255,255,.7);
+    background: linear-gradient(90deg, rgba(255,77,109,.14), rgba(255,107,53,.07)),
+                rgba(255,255,255,.7);
+    box-shadow: var(--glass-border), var(--glass-shadow);
   }
   .idx {
     width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto;
@@ -97,20 +157,20 @@
   }
   /* ── 频道彩色方块（对齐参考 UI：CCTV 显示台号，其它显示首字）── */
   .tile {
-    width: 24px; height: 24px; border-radius: 6px; flex: 0 0 auto;
+    width: 24px; height: 24px; border-radius: 7px; flex: 0 0 auto;
     display: grid; place-items: center;
     color: #fff; font-size: 11.5px; font-weight: 600;
     letter-spacing: -.2px;
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.26), 0 2px 5px rgba(0,0,0,.12);
   }
   /* 收藏星：默认淡，已收藏高亮，hover 放大一点 */
   .star {
     flex: 0 0 auto; width: 22px; text-align: center;
-    color: #4a4f61; font-size: 14px; cursor: pointer;
+    color: #b6bccd; font-size: 14px; cursor: pointer;
     transition: color .15s, transform .15s;
   }
   .star:hover { color: var(--fg); transform: scale(1.15); }
-  .star.on { color: #ffc53d; }
+  .star.on { color: #f5a623; }
   .name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dim { color: var(--fg-dim); font-size: 12px; }
   .chinfo {
@@ -123,7 +183,7 @@
   section { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
   .stage {
     flex: 1 1 auto; display: grid; place-items: center;
-    position: relative; min-height: 0; background: #000;
+    position: relative; min-height: 0; background: #0b0d12;
   }
   .stage .ph {
     color: var(--fg-dim); font-size: 15px; text-align: center; line-height: 2;
@@ -137,7 +197,7 @@
   /* 旋转指示器：只在新频道加载中显示（初始「点左侧频道」占位不带） */
   .spin {
     width: 26px; height: 26px; margin: 0 auto 16px;
-    border: 2px solid rgba(255,255,255,.13);
+    border: 2px solid rgba(28,35,48,.14);
     border-top-color: var(--hi);
     border-right-color: var(--lo);
     border-radius: 50%;
@@ -151,7 +211,10 @@
   }
   .info {
     flex: 0 0 auto; padding: 10px 18px;
-    border-top: 1px solid var(--line); color: var(--fg-dim); font-size: 12px;
+    border-top: 1px solid var(--line-soft); color: var(--fg-dim); font-size: 12px;
+    background: var(--glass);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
     font-family: ui-monospace, Consolas, monospace;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
@@ -164,17 +227,19 @@
     flex: 0 0 auto; height: 46px;
     display: flex; align-items: center; gap: 12px;
     padding: 0 14px;
-    border-top: 1px solid var(--line);
-    background: #14161f;
+    border-top: 1px solid var(--line-soft);
+    background: var(--glass);
+    backdrop-filter: blur(22px) saturate(160%);
+    -webkit-backdrop-filter: blur(22px) saturate(160%);
     font-size: 12.5px; color: var(--fg-dim);
     user-select: none;
   }
   .c-l { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
   .cdot {
     width: 7px; height: 7px; border-radius: 50%;
-    background: #4b5063; flex: 0 0 auto; transition: background .2s, box-shadow .2s;
+    background: #c3c9d8; flex: 0 0 auto; transition: background .2s, box-shadow .2s;
   }
-  .cdot.on { background: var(--hi); box-shadow: 0 0 7px var(--hi); }
+  .cdot.on { background: var(--hi); box-shadow: 0 0 8px var(--hi); }
   .cname {
     color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
@@ -185,13 +250,14 @@
     font-family: ui-monospace, Consolas, monospace;
   }
   .cbtn {
-    border: 1px solid var(--line); background: var(--panel); color: var(--fg);
-    border-radius: 7px; height: 27px; min-width: 28px; padding: 0 9px;
+    border: 1px solid var(--line-soft); background: var(--glass-strong); color: var(--fg);
+    border-radius: 8px; height: 27px; min-width: 28px; padding: 0 9px;
     font-size: 12.5px; line-height: 1; cursor: pointer;
-    transition: border-color .15s, color .15s, opacity .15s;
+    box-shadow: var(--glass-border);
+    transition: border-color .15s, color .15s, opacity .15s, box-shadow .15s;
   }
-  .cbtn:hover:not(:disabled) { border-color: var(--hi); color: var(--hi); }
-  .cbtn:disabled { opacity: .35; cursor: default; }
+  .cbtn:hover:not(:disabled) { border-color: var(--hi); color: var(--hi); box-shadow: 0 0 0 3px rgba(255,77,109,.12); }
+  .cbtn:disabled { opacity: .4; cursor: default; }
   .cbtn.wide { padding: 0 13px; }
   /* 全屏时收起顶栏和左侧列表，只留画面 + 控制条 */
   body.fs header, body.fs aside { display: none; }
@@ -201,41 +267,47 @@
   .vol input[type=range] {
     -webkit-appearance: none; appearance: none;
     width: 84px; height: 4px; border-radius: 2px;
-    background: #2b2f3d; outline: none; cursor: pointer;
+    background: rgba(120,132,168,.28); outline: none; cursor: pointer;
   }
   .vol input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none; appearance: none;
-    width: 12px; height: 12px; border-radius: 50%;
-    background: var(--hi); border: none; cursor: pointer;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: var(--hi); border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(255,77,109,.4); cursor: pointer;
   }
   select.cbtn { padding: 0 6px; height: 27px; }
-  select.cbtn option { background: #181a24; color: var(--fg); }
+  select.cbtn option { background: #ffffff; color: var(--fg); }
   .c-r { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 
   /* ── 节目单弹层 ── */
   .epg-mask {
     position: fixed; inset: 0; z-index: 9998;
-    background: rgba(0,0,0,.55);
+    background: rgba(24,28,40,.32);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
     display: flex; align-items: flex-end; justify-content: center;
     padding-bottom: 60px;
   }
   .epg-card {
     width: min(520px, 88vw); max-height: 62vh; display: flex; flex-direction: column;
-    border-radius: 14px; background: #171926; border: 1px solid var(--line);
-    box-shadow: 0 16px 48px rgba(0,0,0,.55); color: var(--fg);
+    border-radius: 16px; background: var(--glass-strong);
+    backdrop-filter: blur(30px) saturate(170%);
+    -webkit-backdrop-filter: blur(30px) saturate(170%);
+    box-shadow: var(--glass-border), var(--glass-shadow);
+    color: var(--fg);
   }
   .epg-head {
     padding: 14px 18px 10px; font-size: 15px; font-weight: 600;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--line-soft);
     display: flex; align-items: center; justify-content: space-between;
   }
   .epg-head span { font-size: 12px; color: var(--fg-dim); font-weight: 400; }
   .epg-body { overflow-y: auto; padding: 8px 10px 12px; }
   .epg-row {
-    display: flex; gap: 12px; padding: 8px 10px; border-radius: 8px;
+    display: flex; gap: 12px; padding: 8px 10px; border-radius: 10px;
     font-size: 13px; line-height: 1.5;
   }
-  .epg-row:nth-child(odd) { background: rgba(255,255,255,.025); }
+  .epg-row:nth-child(odd) { background: rgba(120,132,168,.06); }
   .epg-row .t {
     flex: 0 0 52px; color: var(--hi);
     font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
@@ -246,14 +318,17 @@
   /* ── 线路耗尽弹窗（本机源 / 官网源各自独立） ── */
   .exhaust-mask {
     position: fixed; inset: 0; z-index: 9999;
-    background: rgba(0,0,0,.55);
+    background: rgba(24,28,40,.36);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     display: flex; align-items: center; justify-content: center;
   }
   .exhaust-card {
     width: min(360px, 86vw); padding: 22px 22px 18px;
-    border-radius: 14px; background: #1a1c27;
-    border: 1px solid var(--line);
-    box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    border-radius: 16px; background: var(--glass-strong);
+    backdrop-filter: blur(30px) saturate(170%);
+    -webkit-backdrop-filter: blur(30px) saturate(170%);
+    box-shadow: var(--glass-border), var(--glass-shadow);
     color: var(--fg);
   }
   .exhaust-card b {
@@ -264,18 +339,20 @@
   .exhaust-card p { margin: 0 0 6px; color: var(--fg-dim); font-size: 13px; line-height: 1.7; }
   .exhaust-card .btns { display: flex; gap: 10px; margin-top: 16px; }
   .exhaust-card button {
-    flex: 1 1 auto; padding: 9px 0; border: 1px solid var(--line); border-radius: 9px;
-    background: var(--panel); color: var(--fg); font-size: 14px; cursor: pointer;
+    flex: 1 1 auto; padding: 9px 0; border: 1px solid var(--line-soft); border-radius: 10px;
+    background: rgba(255,255,255,.55); color: var(--fg); font-size: 14px; cursor: pointer;
+    box-shadow: var(--glass-border);
   }
-  .exhaust-card button:hover { background: rgba(255,255,255,.08); }
+  .exhaust-card button:hover { background: rgba(255,255,255,.8); }
   .exhaust-card button.primary {
     border: none; color: #fff; font-weight: 600;
     background: linear-gradient(135deg, var(--hi), var(--lo));
+    box-shadow: 0 4px 14px rgba(255,77,109,.4), inset 0 1px 0 rgba(255,255,255,.35);
   }
 </style>
 </head>
 <body>
-  <header>
+  <header data-tauri-drag-region>
     <span class="brand-dot"></span>
     <h1>纯净电视直播</h1>
     <!-- 数据源切换（对齐早前 desktop）：本机源（api 分类）/ 官网源（cctv·央视频·地方 分组） -->
@@ -286,6 +363,11 @@
     <span class="spacer"></span>
     <span class="chinfo" id="chinfo"></span>
     <span class="ver" id="ver">加载中…</span>
+    <!-- 沉浸式窗口控制（关系统标题栏后，由这里接管 最小化/关闭） -->
+    <div class="winbtns">
+      <button class="wbtn" id="minBtn" title="最小化" aria-label="最小化">─</button>
+      <button class="wbtn wclose" id="closeBtn" title="关闭" aria-label="关闭">✕</button>
+    </div>
   </header>
 
   <main>
@@ -736,6 +818,12 @@
   if (C.prev) C.prev.onclick = () => switchLine(-1);
   if (C.next) C.next.onclick = () => switchLine(1);
   if (C.fs) C.fs.onclick = toggleFs;
+
+  // ── 沉浸式窗口控制（最小化 / 关闭）───────────────────────────────
+  const minBtn = document.getElementById('minBtn');
+  const closeBtn = document.getElementById('closeBtn');
+  if (minBtn) minBtn.onclick = () => { try { invoke('minimize_window'); } catch (e) {} };
+  if (closeBtn) closeBtn.onclick = () => { try { invoke('close_window'); } catch (e) {} };
 
   // ── 暂停 / 音量 / 静音 / 画面适应 ────────────────────────────────
   let pausedNow = false;
