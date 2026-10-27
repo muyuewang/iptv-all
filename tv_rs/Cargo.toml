@@ -1,6 +1,6 @@
 [package]
 name = "clean-tv-core"
-version = "0.1.0"
+version = "2.10.53"
 edition = "2021"
 description = "纯净电视 · Rust 数据层（从 shared/core.py / wvt.py 移植的纯逻辑）"
 license = "MIT"

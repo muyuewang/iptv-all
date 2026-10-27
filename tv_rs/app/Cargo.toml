@@ -1,6 +1,6 @@
 [package]
 name = "clean-tv-app"
-version = "0.1.0"
+version = "2.10.53"
 edition = "2021"
 description = "纯净电视 · Tauri 壳（里程碑 0：验证 MSVC + WebView2 + 数据层打通）"
 license = "MIT"
