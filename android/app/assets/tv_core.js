@@ -101,6 +101,15 @@
     return apiGet("/iptve.php?tid=" + tid + "&app=517")
       .then(function (h) {
         var v = parseChannels(h, tid);
+        if (v.length) return v;
+        // ★ 双路由回退（#94 对齐 Rust 端）：app 路由 404/空 → 退普通路由（不带 app）
+        //   再抓一次。港澳台 gt/wintv123 等分类历史上有「app 路由重 404」的问题，
+        //   普通路由作为实时化的保险。
+        return apiGet("/iptve.php?tid=" + tid).then(function (h2) {
+          return parseChannels(h2, tid);
+        });
+      })
+      .then(function (v) {
         _cache[tid] = { t: now, v: v };
         return v;
       });
@@ -217,6 +226,32 @@
       });
   }
 
+  /**
+   * ★ 自愈版抓播放页（三端拉平，#92/#93 对齐 Rust 端）：
+   *   抓播放页失败 / 解不出线路（urls 为空）时，带新请求自动重抓一次 ——
+   *   源站播放页 token 按 IP/时段轮换 + 服务端临时抽风，重抓即好，代价仅 1~3s。
+   *   fetch_play 原版保持单次语义不变，这里包一层重试。
+   */
+  function fetchPlayRetry(tid, id, retries) {
+    retries = (retries === undefined) ? 2 : retries;
+    function once() {
+      return fetchPlay(tid, id).then(function (res) {
+        return res;
+      }).catch(function (e) {
+        return { urls: [], epg: [], __err: String(e && e.message || e) };
+      });
+    }
+    return once().then(function (first) {
+      if (first.urls && first.urls.length) return first;
+      return once().then(function (second) {
+        // 两次都空 → 返回第二次的（带 __err 说明），调用方据此走跨分类/弹窗。
+        if (second.urls && second.urls.length) return second;
+        second.__retried = true;
+        return second;
+      });
+    });
+  }
+
   /* ---------------------------------------------------------------- 台标 */
   function logoSrc(name, LOGOS) {
     LOGOS = LOGOS || root.LOGOS || {};
@@ -271,6 +306,7 @@
     decryptPage: decryptPage,
     parseEpg: parseEpg,
     fetchPlay: fetchPlay,
+    fetchPlayRetry: fetchPlayRetry,
     logoSrc: logoSrc,
     favArr: favArr,
     favSave: favSave,

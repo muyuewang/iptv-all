@@ -17,6 +17,7 @@ mod net_probe;
 mod official_embed;
 mod official_web;
 mod player;
+mod session;
 
 use serde::Serialize;
 use std::sync::Arc;
@@ -79,12 +80,62 @@ struct AppState {
     /// 换算后缓存。官网源 WebView2 直播窗要用它定位（落在播放区）。
     /// ★ 与 host 的 place_over_client 产出同一套坐标，避免官网/本机两源各自换算漂移。
     stage_rect: std::sync::Mutex<Option<(i32, i32, i32, i32)>>,
+    /// 最近一次上报的播放区**相对视口 CSS 偏移**（x,y,w,h + vw,vh），由 report_stage_rect
+    /// 原样缓存。主窗口**拖动**时（屏幕原点变了，但视口内布局不变），用它重新
+    /// `place_over_client`（内部 ClientToScreen 现算新原点）把 mpv 承载窗/官网直播窗
+    /// 重新贴到主窗口上——否则拖动后视频画面与主窗体分离（用户实测白框分离）。
+    stage_css: std::sync::Mutex<Option<(i32, i32, i32, i32, i32, i32)>>,
 }
 
 /// 全局频道缓存：启动预抓取后，命令 handler 只做纯内存读（零 HTTPS），
 /// 从而绕开「命令内发 HTTPS 后返回值无法回传前端」的根故障。
 static CHANNELS_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, Vec<Channel>>>> =
     std::sync::Mutex::new(None);
+
+// ============================================================================
+// 会话层桥接（session.rs 的回收/几何同步统一入口）
+// ----------------------------------------------------------------------------
+// `session::SessionManager` 是「谁在播、怎么统一回收、几何怎么统一同步」的唯一
+// 入口。它需要调用底层三件事：停 mpv、关官网直播窗、按后端类型同步几何。
+// 这三件事分别需要访问 `player::Player`（mpv 进程）、`player::VideoHost`（mpv
+// 承载窗）、`official_embed`（WebView2 直播窗静态句柄）。前两者挂在 AppState 里，
+// 用全局 OnceLock 做一次初始化，供 session 层（非 tauri command 上下文）取用。
+// ============================================================================
+
+static G_PLAYER: std::sync::OnceLock<Arc<player::Player>> = std::sync::OnceLock::new();
+static G_HOST: std::sync::OnceLock<Arc<player::VideoHost>> = std::sync::OnceLock::new();
+
+/// 停掉当前 mpv（session 层回收用的统一入口，内部把 wait 丢后台线程）。
+fn stop_mpv() {
+    if let Some(p) = G_PLAYER.get() {
+        p.stop();
+    }
+}
+
+/// 关闭官网源 WebView2 直播窗（session 层回收用的统一入口）。
+fn close_live() {
+    official_embed::close_live_window();
+}
+
+/// 按后端类型把几何同步到对应底层窗口（session 层几何同步统一入口）。
+///
+/// ★ 这是「几何单一真源」的落点：不再由 `report_stage_rect` 分别调
+///   `host.place_over_client` + `official_embed::sync_live_geometry` 两处，
+///   而是这里一次性同步当前会话在播的那个后端。
+fn apply_geometry(kind: &'static str, rect: session::StageRect) {
+    match kind {
+        "webview" => {
+            // 官网源：WebView2 直播窗直接摆到播放区。
+            official_embed::sync_live_geometry(rect.x, rect.y, rect.w, rect.h);
+        }
+        _ => {
+            // 本机源：mpv 承载窗摆到播放区（--wid 父窗口）。
+            if let Some(host) = G_HOST.get() {
+                host.place(rect.x, rect.y, rect.w, rect.h);
+            }
+        }
+    }
+}
 
 /// 当前播放上下文（供底部控制条显示「线路 x/y」、以及手动切换线路）。
 ///
@@ -1162,23 +1213,49 @@ fn spawn_local_fetch_depth(app: tauri::AppHandle, player: Arc<player::Player>, h
         let mut urls: Vec<String> = Vec::new();
         let mut used_tid = tid.clone();
         let mut used_cid = cid.clone();
-        let res = clean_tv_core::net::blocking_fetch_play(local_api(), &tid, &cid, &cli);
-        match res {
-            Ok((u, epg, msg)) if msg == "ok" => {
-                urls = u
-                    .into_iter()
-                    .filter(|x| clean_tv_core::wvt::is_direct_stream(x))
-                    .collect();
-                // ★ 节目单留着给底部「节目单」按钮用（以前直接 `_epg` 丢弃了）
-                *NOW_EPG.lock().unwrap_or_else(|p: std::sync::PoisonError<_>| p.into_inner()) = epg;
+        // ★★ 抓取播放页 → 过滤直连线路，抽成闭包以便「失败自动重抓」复用。
+        //   带新请求重试一次的原因：源站播放页 token 按 IP/时段轮换，且服务端
+        //   临时抽风（返回 `msg=页面结构变化` / 空线路 / 网络抖动）占比不低，
+        //   实测一次重抓即可恢复 —— 代价仅 1~3 秒，远小于直接弹窗让用户重按。
+        let fetch_and_filter = |tid: &str, cid: &str, try_idx: u32| -> (Vec<String>, String) {
+            let res = clean_tv_core::net::blocking_fetch_play(local_api(), tid, cid, &cli);
+            match res {
+                Ok((u, epg, msg)) => {
+                    if msg == "ok" {
+                        // ★ 节目单留着给底部「节目单」按钮用（以前直接 `_epg` 丢弃了）
+                        *NOW_EPG.lock().unwrap_or_else(|p: std::sync::PoisonError<_>| p.into_inner()) =
+                            epg;
+                        let lines = u
+                            .into_iter()
+                            .filter(|x| clean_tv_core::wvt::is_direct_stream(x))
+                            .collect();
+                        (lines, msg)
+                    } else {
+                        diag(&format!(
+                            "[play] 本机源 gen={gen} 抓线#{try_idx} {tid}:{cid} 播放页返回 msg={msg}"
+                        ));
+                        (Vec::new(), msg)
+                    }
+                }
+                Err(e) => {
+                    diag(&format!(
+                        "[play] 本机源 gen={gen} 抓线#{try_idx} {tid}:{cid} 失败: {e}"
+                    ));
+                    (Vec::new(), format!("抓线错误: {e}"))
+                }
             }
-            Ok((_u, _epg, msg)) => {
-                diag(&format!("[play] 本机源 gen={gen} 播放页返回 msg={msg}"));
-            }
-            Err(e) => {
-                diag(&format!("[play] 本机源抓线失败 gen={gen}: {e}"));
-            }
+        };
+        // ★ 首次抓取；空线路/异常时带新请求重抓一次（源站临时抽风常见）。
+        let (mut lines, mut last_msg) = fetch_and_filter(&tid, &cid, 1);
+        if lines.is_empty() {
+            diag(&format!(
+                "[play] 本机源 {tid}:{cid} 首次无线路（{last_msg}），自动重抓一次"
+            ));
+            let (l2, m2) = fetch_and_filter(&tid, &cid, 2);
+            lines = l2;
+            last_msg = m2;
         }
+        urls = lines;
         // ★★ 跨分类重试（源站的 app 路由只对部分分类提供播放页）。
         //   实测（2026-10-25）：app 路由（长 UA）下
         //     `ys`/`ws`/`ty` 分类的播放页正常（200 + 可解密的加密 option）；
@@ -1193,19 +1270,18 @@ fn spawn_local_fetch_depth(app: tauri::AppHandle, player: Arc<player::Player>, h
                 ));
                 used_tid = t2.clone();
                 used_cid = c2.clone();
-                match clean_tv_core::net::blocking_fetch_play(local_api(), &t2, &c2, &cli) {
-                    Ok((u, _epg, msg)) if msg == "ok" => {
-                        urls = u
-                            .into_iter()
-                            .filter(|x| clean_tv_core::wvt::is_direct_stream(x))
-                            .collect();
-                    }
-                    Ok((_u, _epg, msg)) => {
-                        diag(&format!("[play] 本机源跨分类重试 {t2}:{c2} msg={msg}"));
-                    }
-                    Err(e) => {
-                        diag(&format!("[play] 本机源跨分类重试 {t2}:{c2} 失败: {e}"));
-                    }
+                // 复用上面的抓取闭包（同样带「空线路自动重抓一次」）。
+                let (l2, m2) = fetch_and_filter(&t2, &c2, 1);
+                if l2.is_empty() {
+                    diag(&format!(
+                        "[play] 本机源跨分类 {t2}:{c2} 首次无线路（{m2}），自动重抓一次"
+                    ));
+                    let (l3, m3) = fetch_and_filter(&t2, &c2, 2);
+                    urls = l3;
+                    last_msg = m3;
+                } else {
+                    urls = l2;
+                    last_msg = m2;
                 }
             }
         }
@@ -1243,13 +1319,47 @@ fn spawn_local_fetch_depth(app: tauri::AppHandle, player: Arc<player::Player>, h
                 }
                 Err(e) => {
                     diag(&format!("[play] 本机源全部线路失败: {e}"));
-                    // ★★ 本机源重试完所有线路仍失败 → 不自动回落，改为**弹窗让用户选**：
-                    //   「继续重试本频道」或「切换当前列表的下一个频道」。
-                    //   由前端监听 local-exhausted 事件弹窗；Rust 只把现场回推过去。
-                    let _ = app.emit(
-                        "local-exhausted",
-                        format!("{used_tid}|{used_cid}|{label}|{e}"),
-                    );
+                    // ★★ 线路 token 失效自动换线（任务 #93）：源站 CDN 的 `?sign=`
+                    //   短期签发，到期后**这批线路集体秒退**（mpv 全 code=2）。
+                    //   此时重新抓一次播放页 → 拿到带新 sign 的新线路，再探速播一遍，
+                    //   往往直接恢复。代价 1~3 秒抓线 + 探速，远小于弹窗让用户重按。
+                    //   代次核对：期间用户又换台则作废。
+                    if FETCH_GEN.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                        diag(&format!("[play] 本机源换线回合作废 gen={gen}（用户已换台）"));
+                        return;
+                    }
+                    diag(&format!(
+                        "[play] 本机源 {used_tid}:{used_cid} 线路疑似 token 失效，重抓播放页换新线路"
+                    ));
+                    let (fresh, m3) = fetch_and_filter(&used_tid, &used_cid, 3);
+                    if fresh.is_empty() {
+                        diag(&format!(
+                            "[play] 本机源换线回合重抓仍无线路（{m3}），弹窗择路"
+                        ));
+                        let _ = app.emit(
+                            "local-exhausted",
+                            format!("{used_tid}|{used_cid}|{label}|{e}"),
+                        );
+                        return;
+                    }
+                    let fresh = race_lines(&fresh, 9, std::time::Duration::from_secs(20));
+                    match play_first_ok(&player, hwnd, &fresh, &app, &label) {
+                        Ok((_u, ok2)) => {
+                            now_update_lines(fresh.clone(), ok2);
+                            diag(&format!(
+                                "[play] 本机源 换线回合出画 线路 {}/{}（token 刷新成功）",
+                                ok2 + 1,
+                                fresh.len()
+                            ));
+                        }
+                        Err(e2) => {
+                            diag(&format!("[play] 本机源换线回合仍失败: {e2}"));
+                            let _ = app.emit(
+                                "local-exhausted",
+                                format!("{used_tid}|{used_cid}|{label}|{e2}"),
+                            );
+                        }
+                    }
                 }
             }
             return;
@@ -1281,8 +1391,9 @@ fn play_official_source(
     tid: String,
     cid: String,
     name: String,
+    session_gen: u64,
 ) -> Result<PlayResult, String> {
-    play_official_source_depth(app, player, hwnd, tid, cid, name, 0)
+    play_official_source_depth(app, player, hwnd, tid, cid, name, 0, session_gen)
 }
 
 /// 带回落深度的官网源播放（见 [`spawn_local_fetch`] 的深度说明）。
@@ -1293,7 +1404,8 @@ fn play_official_source_depth(
     tid: String,
     cid: String,
     name: String,
-    depth: u32,
+    _depth: u32,
+    session_gen: u64,
 ) -> Result<PlayResult, String> {
     let group = tid.strip_prefix(WVT_PREFIX).unwrap_or("").to_string();
     // ★ 缓存值先取到局部变量（避免同名遮蔽导致闭包捕获动态环境）。
@@ -1338,6 +1450,12 @@ fn play_official_source_depth(
                     );
                     return;
                 }
+                // ★ 会话层：官网源直连最终走 mpv，回填准确后端句柄（承载窗 hwnd）。
+                session::SessionManager::global().settle_backend(
+                    session::Backend::Mpv { parent_hwnd: hwnd2 },
+                    None,
+                    session_gen,
+                );
                 let gen0 = p2.gen();
                 match wait_video(&p2, std::time::Duration::from_secs(10)) {
                     Ok(()) => {
@@ -1446,6 +1564,12 @@ fn play_official_source_depth(
                                 idx + 1,
                                 page_list.len()
                             ));
+                            // ★ 会话层：官网源网页线路最终走 WebView2 直播窗，回填准确句柄。
+                            session::SessionManager::global().settle_backend(
+                                session::Backend::Webview { hwnd: live_hwnd },
+                                Some(session::StageRect::new(sx, sy, sw, sh)),
+                                session_gen,
+                            );
                             let _ = app2.emit("play-started", format!("{label}"));
                             return;
                         }
@@ -1497,9 +1621,6 @@ fn play_official_source_depth(
 fn play_channel(tid: String, cid: String, name: String, app: tauri::AppHandle,
                 state: State<'_, AppState>) -> Result<PlayResult, String> {
     diag(&format!("[play] play_channel tid={tid} cid={cid} name={name:?}"));
-    // ★ 切台前先停旧播放 + 关官网源直播窗（open_live_window 内部也会关，这里兜底）。
-    state.player.stop();
-    official_embed::close_live_window();
     // ★ 记下当前播放上下文（控制条要显示频道名 / 线路 x/y）。线路列表稍后由
     //   真正出画的那条路径补上（本机源是后台抓的，这里还不知道有几条）。
     let is_official = tid.starts_with(WVT_PREFIX);
@@ -1527,11 +1648,29 @@ fn play_channel(tid: String, cid: String, name: String, app: tauri::AppHandle,
     }
     host.show();
 
+    // ★★ 会话层：切源/切台统一走 `SessionManager`，旧会话（mpv 进程 + 官网直播窗）
+    //   在这里被**原子替换**——先同步回收旧后端，再登记新后端。这是「残留/双声」
+    //   的根治点：以前 `stop()` + `close_live_window()` 各调各的，现在一处收口。
+    //
+    //   ★ 分叉点收敛：以前这里按 `tid.starts_with(WVT_PREFIX)` 把源码切开成两条
+    //   完全不同的路径。统一后，两条路径最终都会落到「一个后端资源」上——
+    //   本机源最终是 mpv，官网源最终是 mpv（直连）或 WebView2（网页线路）。
+    //   这里先按源码登记一个**占位后端**（本机源=mpv，官网源=webview），真正出画
+    //   的路径再 `settle_backend` 回填准确的句柄与几何。
+    let backend_hint = if is_official {
+        session::Backend::Webview { hwnd: 0 }
+    } else {
+        session::Backend::Mpv { parent_hwnd: hwnd }
+    };
+    let stage = state.stage_rect.lock().unwrap_or_else(|p| p.into_inner())
+        .map(|(x, y, w, h)| session::StageRect::new(x, y, w, h));
+    let session_gen = session::SessionManager::global().replace(backend_hint, stage);
+
     // 官网源分组（`w|{分组}`）：直连缓存命中即播（零网络）；
     // 否则**用内嵌 WebView2 嗅探官网网页真实流**（这才是官网源真正的内容）；
     // 嗅探不到再回落本机源同名 → 789。逻辑见 play_official_source。
     if tid.starts_with(WVT_PREFIX) {
-        return play_official_source(app, player, hwnd, tid, cid, name);
+        return play_official_source(app, player, hwnd, tid, cid, name, session_gen);
     }
 
     // 本机源（裸 tid）：后台实时抓播放页解密，命令秒回。
@@ -1730,10 +1869,9 @@ fn toggle_fullscreen(app: tauri::AppHandle) -> bool {
 /// 停止播放。
 #[tauri::command]
 fn stop_channel(state: State<'_, AppState>) {
-    state.player.stop();
+    // ★ 会话层统一回收：mpv 进程 + 官网直播窗两样一起收干净（不再散落各调各的）。
+    session::SessionManager::global().clear();
     state.host.hide();
-    // ★ 关官网源 WebView2 直播窗（否则残留渲染进程 + 画面）。
-    official_embed::close_live_window();
 }
 
 /// 前端上报播放区（`#stage`）在**视口内**的位置与尺寸（CSS 像素）。
@@ -1753,15 +1891,19 @@ fn report_stage_rect(x: i32, y: i32, w: i32, h: i32, vw: i32, vh: i32,
     let owner = *state.hwnd.lock().unwrap_or_else(|p| p.into_inner());
     let host = state.host.clone();
     host.ensure(owner);
+    // ★ 缓存 CSS 偏移 + 视口尺寸：主窗口拖动时用它重算屏幕坐标（见 Moved 事件）。
+    *state.stage_css.lock().unwrap_or_else(|p| p.into_inner()) = Some((x, y, w, h, vw, vh));
     match host.place_over_client(owner, x, y, w, h, vw, vh) {
         Some((px, py, pw, ph)) => {
             // ★ 缓存屏幕坐标：官网源 WebView2 直播窗要用它落在播放区。
             let mut guard = state.stage_rect.lock().unwrap_or_else(|p| p.into_inner());
             *guard = Some((px, py, pw, ph));
             drop(guard);
-            // ★★ 官网源也在播时，直播窗必须跟着变 —— 否则进出全屏后画面
-            //   还是旧位置/旧尺寸（表现为「视频缩在中间一小块，四周全黑」）。
-            official_embed::sync_live_geometry(px, py, pw, ph);
+            // ★★ 几何单一真源（第三步）：不再分别调 mpv 承载窗 + 官网直播窗两处，
+            //   而是交给会话层按「当前后端」一次性同步。全屏/切源后画面缩在中间
+            //   一整块黑的根因（只动了 mpv、没动直播窗）由此从机制上消除。
+            session::SessionManager::global()
+                .sync_geometry(session::StageRect::new(px, py, pw, ph));
             diag(&format!(
                 "[player] 播放区换算 css=({x},{y},{w},{h}) 视口={vw}x{vh} -> 屏幕=({px},{py},{pw},{ph})"
             ));
@@ -1903,15 +2045,23 @@ fn main() {
         std::thread::spawn(prewarm_wvt);
     }
     std::thread::spawn(prewarm_789);
+    // ★ 会话层全局句柄：先建好 player/host 的 Arc，再同时注入 AppState 与 OnceLock，
+    //   使 session::SessionManager 能在非 tauri 命令上下文里回收 mpv / 同步几何。
+    let app_player = Arc::new(player::Player::new(
+        // 找 mpv：优先 exe 同目录（release 资源布局），退化为开发目录兜底。
+        resolve_exe_mpv(),
+    ));
+    let app_host = Arc::new(player::VideoHost::new());
+    let _ = G_PLAYER.set(app_player.clone());
+    let _ = G_HOST.set(app_host.clone());
+
     tauri::Builder::default()
         .manage(AppState {
-            player: Arc::new(player::Player::new(
-                // 找 mpv：优先 exe 同目录（release 资源布局），退化为开发目录兜底。
-                resolve_exe_mpv(),
-            )),
+            player: app_player,
             hwnd: std::sync::Mutex::new(0),
-            host: Arc::new(player::VideoHost::new()),
+            host: app_host,
             stage_rect: std::sync::Mutex::new(None),
+            stage_css: std::sync::Mutex::new(None),
         })
         .setup(|app| {
             diag("[boot] setup 开始");
@@ -1961,6 +2111,7 @@ fn main() {
                 let app_handle = app.handle().clone();
                 win.on_window_event(move |ev| {
                     use tauri::WindowEvent;
+                    let moved = matches!(ev, WindowEvent::Moved(_));
                     let need_raise = matches!(
                         ev,
                         WindowEvent::Focused(true) | WindowEvent::Moved(_) | WindowEvent::Resized(_)
@@ -1969,6 +2120,30 @@ fn main() {
                         return;
                     }
                     let st = app_handle.state::<AppState>();
+                    // ★★ 主窗口**拖动**（Moved）时，客户区屏幕原点变了，但视口内
+                    //   布局不变——必须用缓存的 CSS 偏移重新换算屏幕坐标，把 mpv
+                    //   承载窗 + 官网直播窗**重新贴**到主窗口上。否则只 raise 不
+                    //   重定位，视频画面停在旧屏幕位置，与主窗体分离（用户实测）。
+                    if moved {
+                        let owner = *st.hwnd.lock().unwrap_or_else(|p| p.into_inner());
+                        if let Some((x, y, w, h, vw, vh)) =
+                            *st.stage_css.lock().unwrap_or_else(|p| p.into_inner())
+                        {
+                            // place_over_client 内部 ClientToScreen 现算新屏幕原点。
+                            if let Some((px, py, pw, ph)) =
+                                st.host.place_over_client(owner, x, y, w, h, vw, vh)
+                            {
+                                *st.stage_rect.lock().unwrap_or_else(|p| p.into_inner()) =
+                                    Some((px, py, pw, ph));
+                                session::SessionManager::global()
+                                    .sync_geometry(session::StageRect::new(px, py, pw, ph));
+                                diag(&format!(
+                                    "[player] 拖动重定位 -> 屏幕=({px},{py},{pw},{ph})"
+                                ));
+                            }
+                        }
+                        return;
+                    }
                     // 只在播放中（承载窗可见）才置顶，避免把隐藏的窗口拉出来。
                     if st.host.hwnd() != 0 {
                         st.host.raise();

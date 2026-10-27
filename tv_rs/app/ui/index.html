@@ -615,10 +615,18 @@
       const y = Math.round(r.top);
       const w = Math.round(r.width);
       const h = Math.round(r.height);
-      const key = `${x},${y},${w},${h},${vw},${vh}`;
-      if (key === lastRectKey) return;
-      lastRectKey = key;
+      // ★★ 主窗口拖动时（onMoved），#stage 相对视口的 CSS 偏移 x/y 与视口
+      //   尺寸 vw/vh **都不变**，所以这里**不能**用「x,y,w,h,vw,vh」做去重 key
+      //   —— 否则拖动窗口时 key 与上次完全相同，直接 return，坐标永不上报，
+      //   后端拿不到新屏幕坐标 → mpv 承载窗/官网直播窗停在旧屏幕位置，
+      //   「拖一下，视频画面与主窗体分离」（用户实测截图白框分离）。
+      //   而后端 report_stage_rect 里是「客户区尺寸 ÷ 视口尺寸」求缩放比 +
+      //   ClientToScreen 现算客户区屏幕原点，只要收到上报就会重新定位——
+      //   关键是**拖动必须真的上报**。这里去掉纯字号去重，仅当「几何完全没变
+      //   （含窗口可能移动）」时仍需上报，故直接放开（report_stage_rect 幂等，
+      //   多报几次只是 SetWindowPos 到同一坐标，无害）。
       await invoke('report_stage_rect', { x, y, w, h, vw, vh });
+      lastRectKey = `${x},${y},${w},${h},${vw},${vh}`;
     } catch (e) { /* 坐标上报失败不影响播放 */ }
   }
 

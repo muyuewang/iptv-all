@@ -2119,6 +2119,42 @@ function nextLine(silent){
     playIdx(i+1);
     return;
   }
+  /* ★★ 本机源全挂自愈（#93 对齐 Rust 端）：CDN 的 `?sign=` 短期签发，到期后
+     「已抓到的那批线路」集体秒退。与其直接弹失败卡，不如**自动重抓播放页**拿新
+     token 线路再续播 —— 往往直接恢复。官网源（wvt）线路表在本地、无 token，
+     不走这里。 */
+  if(cur.tid !== "wvt"){
+    var tk = cur.tid + "/" + cur.id;
+    if(!window.__localRefetchN) window.__localRefetchN = 0;
+    if(window.__localRefetchN < 2 && C.fetchPlayRetry){   /* 最多自动重抓 2 回合，防源站整段故障时刷穿 */
+      window.__localRefetchN++;
+      setStatus("本机源线路失效，重新获取…", true);
+      urlCacheDel(tk);                       /* 清掉旧线路表缓存，避免又开始播同一批死线 */
+      delete LINE_CACHE[tk];
+      C.fetchPlayRetry(cur.tid, cur.id).then(function(res){
+        if(__sessionClosed) return;
+        if(res && res.urls && res.urls.length){
+          window.__localRefetchN = 0;        /* 成功恢复 → 清零，下次失效还能再自愈 */
+          cur.idx = 0;
+          var newUrls = res.urls.filter(function(x){ return !x; }).length ? res.urls : res.urls;
+          /* ★ 抓到的仍是 eplay2 中转口，交给 startLocal 的测速/出画链路（含真流解析） */
+          startLocal(newUrls, res.epg || [], tk);
+        }else{
+          window.__localRefetchN = 0;        /* 重抓失败 → 落回失败卡 */
+          showLocalFailCard();
+        }
+      }).catch(function(){
+        if(__sessionClosed) return;
+        window.__localRefetchN = 0;
+        showLocalFailCard();
+      });
+      return;
+    }
+    window.__localRefetchN = 0;
+  }
+  showLocalFailCard();
+}
+function showLocalFailCard(){
   /* ★ 全部线路都试过了 → 给一张可操作的失败卡，而不是留一行冷文字。
      用户此刻要的是「下一步怎么办」：重试 / 手动挑线路 / 换个频道。 */
   setStatus(null);

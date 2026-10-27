@@ -403,13 +403,24 @@ pub fn blocking_api_get(
 }
 
 /// 同步版 fetch_channels。
+///
+/// ★ 双路由回退（港澳台实时化，2026-10-26）：源站按分类对媒体路由支持不均，
+///   历史上 `tv`/`gt`/`wintv123` 在 app 路由（`&app=517`）下**恒 404**，而
+///   普通路由（不带 `app`）正常。为让港澳台等分类实时可用、且不再依赖
+///   full.dat 快照，这里先走 app 路由，抓不到或解析为空就退回普通路由重抓。
 pub fn blocking_fetch_channels(
     state: &ApiState,
     tid: &str,
     cli: &reqwest::blocking::Client,
 ) -> Result<Vec<Channel>, String> {
     let html = blocking_api_get(state, &format!("/iptve.php?tid={tid}&app=517"), 15, cli)?;
-    Ok(parse_channels(&html, tid))
+    let chans = parse_channels(&html, tid);
+    if !chans.is_empty() {
+        return Ok(chans);
+    }
+    // app 路由 404/空 → 退普通路由重抓一次（源站偶发只对部分分类开普通路由）。
+    let html2 = blocking_api_get(state, &format!("/iptve.php?tid={tid}"), 15, cli)?;
+    Ok(parse_channels(&html2, tid))
 }
 
 /// 同步版 fetch_play。

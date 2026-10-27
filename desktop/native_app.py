@@ -2307,8 +2307,9 @@ class NativeApp:
         threading.Thread(target=self._fetch_play, args=(tid, cid, False), daemon=True).start()
 
     def _fetch_play(self, tid, cid, refresh):
+        # ★ 自愈（三端拉平 #92）：抓播放页失败/空线路时自动重抓一次。
         try:
-            urls, epg, msg = _core.fetch_play(tid, cid)
+            urls, epg, msg = _core.fetch_play_retry(tid, cid)
         except Exception as e:
             urls, epg, msg = [], [], str(e)
         self.cur["urls"] = urls
@@ -2366,10 +2367,34 @@ class NativeApp:
         if gen != self._mpv_gen:
             return                     # 期间已换台/停止
         if not real:
-            self._log("线路 %d/%d 起全部不通（源站无流）" % (idx + 1, n))
-            self._ui(lambda: self.status_lbl.configure(
-                text="该频道线路暂不可用，可点「线路」换一条试试"))
-            return
+            # ★ 自愈（三端拉平 #93）：线路 token/sign 到期导致全挂时，自动重抓
+            #   播放页换新线路再探再播，而不是只提示用户手动换线。
+            tid = self.cur.get("tid")
+            cid = self.cur.get("id")
+            if tid and cid and self.cur.get("src") != "wvt":
+                self._log("线路 %d/%d 全挂，自动重抓播放页换新线路（%s:%s）"
+                          % (idx + 1, n, tid, cid))
+                try:
+                    fresh, _epg2, _msg2 = _core.fetch_play_retry(tid, cid)
+                except Exception as e:          # noqa: BLE001
+                    fresh = []
+                    self._log("重抓播放页异常: %s" % e)
+                if gen != self._mpv_gen:
+                    return                     # 重抓期间又换台
+                if fresh:
+                    self.cur["urls"] = fresh
+                    n2 = len(fresh)
+                    self._ui(lambda: self.status_lbl.configure(
+                        text="已刷新线路 (%d 条)，重新探测…" % n2))
+                    try:
+                        real = _core.first_playable(fresh, timeout=3.5, limit=10)
+                    except Exception as e:     # noqa: BLE001
+                        self._log("重抓后并发探测异常: %s" % e)
+            if not real:
+                self._log("线路 %d/%d 起全部不通（源站无流）" % (idx + 1, n))
+                self._ui(lambda: self.status_lbl.configure(
+                    text="该频道线路暂不可用，可点「线路」换一条试试"))
+                return
         self._log("线路 → 真流: %s" % real[:90])
         self._ui(lambda: self._start_mpv(real))
 

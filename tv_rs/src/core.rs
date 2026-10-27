@@ -353,6 +353,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_channels_gt_returns_entries() {
+        // 港澳台分类：确认 tid=gt 的频道条目能被解析（港澳台实时化回归）。
+        let html = r#"<a href="iptve.php?act=play&tid=gt&id=1">TVB翡翠台</a><a href="iptve.php?act=play&tid=gt&id=50">愛爾達體育1台</a>"#;
+        let ch = parse_channels(html, "gt");
+        assert_eq!(ch.len(), 2);
+        assert_eq!(ch[0].id, "1");
+        assert_eq!(ch[0].name, "TVB翡翠台");
+        assert_eq!(ch[1].id, "50");
+        assert_eq!(ch[1].name, "愛爾達體育1台");
+    }
+
+    #[test]
     fn concat_val_reverse() {
         // "abc".split("").reverse().join("") -> "cba"
         assert_eq!(concat_val(r#""abc".split("").reverse().join("")"#), "cba");

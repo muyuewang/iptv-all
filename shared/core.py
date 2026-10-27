@@ -189,6 +189,11 @@ def fetch_channels(tid, cache=None, use_cache=True):
         return cache[tid][1]
     html = api_get("/iptve.php?tid=%s&app=517" % tid)
     chans = parse_channels(html, tid)
+    # ★ 双路由回退（三端拉平 #94）：app 路由 404/空 → 退普通路由（不带 app）重抓。
+    #   港澳台 gt/wintv123 等分类历史上有「app 路由重 404」的问题，普通路由作保险。
+    if not chans:
+        html = api_get("/iptve.php?tid=%s" % tid)
+        chans = parse_channels(html, tid)
     if cache is not None:
         cache[tid] = (now, chans)
     return chans
@@ -289,6 +294,25 @@ def fetch_play(tid, cid):
     html = api_get("/iptve.php?act=play&tid=%s&id=%s" % (tid, cid))
     urls, msg = decrypt_page(html, tid, cid)
     return urls, parse_epg(html), msg
+
+
+def fetch_play_retry(tid, cid, retries=2):
+    """★ 自愈版抓播放页（三端拉平 #92/#93）：失败/空线路时带新请求自动重抓。
+
+    fetch_play 保持单次语义不变，这里包一层重试。返回与原版一致的三元组；
+    两次都失败时返回最后一次的 (urls, epg, msg)。
+    """
+    last = ([], [], "抓线失败")
+    for i in range(retries):
+        try:
+            urls, epg, msg = fetch_play(tid, cid)
+        except Exception as e:          # noqa: BLE001
+            last = ([], [], "异常:%r" % (e,))
+            continue
+        last = (urls, epg, msg)
+        if urls:
+            return last
+    return last
 
 
 # ------------------------------------------------------------------ 台标
